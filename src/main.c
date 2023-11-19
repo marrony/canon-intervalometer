@@ -22,6 +22,7 @@ static void fix_root_dir(const char* argv) {
   snprintf(s_root_dir, PATH_MAX, "%s/web_root", dirname(temp_dir));
 }
 
+static bool g_connected = false;
 static bool g_shooting = false;
 static long g_delay = 5;
 static long g_exposure = 30;
@@ -46,33 +47,47 @@ static void serialize_state(struct mg_connection* c) {
   );
 }
 
-static void fn(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+static void evt_handler(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+  (void) fn_data;
+
   if (ev == MG_EV_HTTP_MSG) {
     struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    struct mg_str method = hm->method;
 
-    if (mg_http_match_uri(hm, "/api/cameras")) {
+    bool is_get = mg_vcmp(&method, "GET") == 0;
+    bool is_post = mg_vcmp(&method, "POST") == 0;
+
+    if (is_get && mg_http_match_uri(hm, "/api/cameras")) {
       mg_http_reply(
         c, 200,
         "Content-Type: application/json\r\n"
         "Access-Control-Allow-Origin: *\r\n",
         "[{\"id\": 1, \"description\": \"Canon EOS R50\"}]\n"
       );
-    } else if (mg_http_match_uri(hm, "/api/camera/*/connect")) {
-      serialize_state(c);
-/*      mg_http_reply(
-        c, 200,
-        "Content-Type: application/json\r\n"
-        "Access-Control-Allow-Origin: *\r\n",
-        "{\"state\": \"success\"}\n"
-      );*/
-    } else if (mg_http_match_uri(hm, "/api/camera/*/disconnect")) {
+    } else if (is_post && mg_http_match_uri(hm, "/api/camera/*/connect")) {
+      if (g_connected) {
+        mg_http_reply(
+          c, 200,
+          "Content-Type: application/json\r\n"
+          "Access-Control-Allow-Origin: *\r\n",
+          "{%m:%m,%m:%m}\n",
+          MG_ESC("status"), MG_ESC("failure"),
+          MG_ESC("description"), MG_ESC("Already connected")
+        );
+      } else {
+        g_connected = true;
+        serialize_state(c);
+      }
+    } else if (is_post && mg_http_match_uri(hm, "/api/camera/*/disconnect")) {
+      g_connected = false;
+
       mg_http_reply(
         c, 200,
         "Content-Type: application/json\r\n"
         "Access-Control-Allow-Origin: *\r\n",
         "{\"status\": \"success\"}\n"
       );
-    } else if (mg_http_match_uri(hm, "/api/camera/*/start-shoot")) {
+    } else if (is_post && mg_http_match_uri(hm, "/api/camera/*/start-shoot")) {
       struct mg_str json = hm->body;
 
       g_delay = mg_json_get_long(json, "$.delay", -1);
@@ -89,7 +104,7 @@ static void fn(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
         "Access-Control-Allow-Origin: *\r\n",
         "{\"status\": \"success\"}\n"
       );
-    } else if (mg_http_match_uri(hm, "/api/camera/*/stop-shoot")) {
+    } else if (is_post && mg_http_match_uri(hm, "/api/camera/*/stop-shoot")) {
       g_shooting = false;
 
       mg_http_reply(
@@ -98,7 +113,7 @@ static void fn(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
         "Access-Control-Allow-Origin: *\r\n",
         "{\"status\": \"success\"}\n"
       );
-    } else if (mg_http_match_uri(hm, "/api/camera/*/state")) {
+    } else if (is_get && mg_http_match_uri(hm, "/api/camera/*/state")) {
       if (g_frames_taken++ > 10) {
         g_shooting = false;
         g_frames_taken = 0;
@@ -106,21 +121,24 @@ static void fn(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
 
       serialize_state(c);
     } else {
-      struct mg_http_serve_opts opts = {.root_dir = s_root_dir};
-      mg_http_serve_dir(c, ev_data, &opts);
+      mg_http_reply(
+        c, 404,
+        "Content-Type: application/json\r\n"
+        "Access-Control-Allow-Origin: *\r\n",
+        "{\"status\": \"failure\"}\n"
+      );
     }
   }
-  (void) fn_data;
 }
 
 int main(int argc, char* argv[]) {
   fix_root_dir(argv[0]);
 
-  struct mg_mgr mgr;                            // Event manager
-  mg_log_set(MG_LL_DEBUG);                      // Set log level
-  mg_mgr_init(&mgr);                            // Initialise event manager
-  mg_http_listen(&mgr, s_http_addr, fn, NULL);  // Create HTTP listener
-  for (;;) mg_mgr_poll(&mgr, 1000);             // Infinite event loop
+  struct mg_mgr mgr;
+  mg_log_set(MG_LL_DEBUG);
+  mg_mgr_init(&mgr);
+  mg_http_listen(&mgr, s_http_addr, evt_handler, NULL);
+  for (;;) mg_mgr_poll(&mgr, 1000);
   mg_mgr_free(&mgr);
   return 0;
 }

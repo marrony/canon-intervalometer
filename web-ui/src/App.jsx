@@ -78,10 +78,15 @@ function App() {
     const json = await response.json();
     console.log(json);
 
-    if (json.status === 'success') {
-      const state = json.state;
+    switch (json.status) {
+      case 'success':
+        const state = json.state;
+        onChangeState2({ ...state, connected: true });
+        break;
 
-      onChangeState2({ ...state, connected: true });
+      case 'failure':
+        alert(json.description);
+        break;
     }
   };
 
