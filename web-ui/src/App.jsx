@@ -20,7 +20,9 @@ import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 // frames: number of frames
 // hold: on/off
 
-const backendUrl = "http://192.168.1.73:8000"
+const backendUrl = (() => {
+  return import.meta.env.VITE_BACKEND_URL ?? location.origin;
+})();
 
 const defaultState = {
   delay: 0,

@@ -120,6 +120,9 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data, void *fn
       }
 
       serialize_state(c);
+    } else if (is_get) {
+      struct mg_http_serve_opts opts = {.root_dir = s_root_dir};
+      mg_http_serve_dir(c, ev_data, &opts);
     } else {
       mg_http_reply(
         c, 404,
