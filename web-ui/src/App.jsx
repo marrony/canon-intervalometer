@@ -62,10 +62,14 @@ function App() {
     const json = await response.json();
     console.log(json);
 
-    setCameras(json);
+    if (json.status === 'success') {
+      setCameras(json.cameras);
 
-    if (json && json.length > 0) {
-      onChangeState(json[0].id, 'camera')
+      if (json.cameras.length > 0) {
+        onChangeState(json.cameras[0].id, 'camera')
+      }
+    } else {
+      setCameras([]);
     }
   };
 
@@ -73,8 +77,13 @@ function App() {
     event.preventDefault();
 
     const response = await fetch(
-      `${backendUrl}/api/camera/${state.camera}/connect`,
-      { method: "POST" }
+      `${backendUrl}/api/camera/connect`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          camera: state.camera
+        })
+      }
     );
 
     const json = await response.json();
@@ -96,8 +105,13 @@ function App() {
     event.preventDefault();
 
     const response = await fetch(
-      `${backendUrl}/api/camera/${state.camera}/disconnect`,
-      { method: "POST" }
+      `${backendUrl}/api/camera/disconnect`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          camera: state.camera
+        })
+      }
     );
 
     const json = await response.json();
@@ -111,10 +125,11 @@ function App() {
     event.preventDefault();
 
     const response = await fetch(
-      `${backendUrl}/api/camera/${state.camera}/start-shoot`,
+      `${backendUrl}/api/camera/start-shoot`,
       {
         method: "POST",
         body: JSON.stringify({
+          camera: state.camera,
           delay: state.delay,
           exposure: state.exposure,
           interval: state.interval,
@@ -133,8 +148,13 @@ function App() {
 
   const getState = async () => {
     const response = await fetch(
-      `${backendUrl}/api/camera/${state.camera}/state`,
-      { method: "GET" }
+      `${backendUrl}/api/camera/state`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          camera: state.camera
+        })
+      }
     );
 
     return await response.json();
@@ -163,8 +183,13 @@ function App() {
     event.preventDefault();
 
     const response = await fetch(
-      `${backendUrl}/api/camera/${state.camera}/stop-shoot`,
-      { method: "POST" }
+      `${backendUrl}/api/camera/stop-shoot`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          camera: state.camera
+        })
+      }
     );
 
     const json = await response.json();
