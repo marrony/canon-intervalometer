@@ -9,6 +9,7 @@
 // Results are JSON strings
 
 #include <stdlib.h>
+#include <stdbool.h>
 #include <libgen.h>
 #include <pthread.h>
 #include <EDSDK.h>
@@ -283,38 +284,54 @@ enum shooting_state {
 
 struct shooting_data_t {
   enum shooting_state state;
-  long timer;
+  int64_t timer_us;
 };
 
 static struct shooting_data_t shooting_data = {
   .state = END_STATE,
-  .timer = 0
+  .timer_us = 0
 };
 
-#define TIMER_GRANULARITY 100
+#define TIMER_GRANULARITY 500
 
+static int64_t get_system_micros() {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return tv.tv_sec*1000000ll + tv.tv_usec;
+}
+
+//todo: calculate the real elapsed time
 static void shooting_timer(void* data) {
+  static int64_t last_time = 0;
+
+  int64_t now = get_system_micros();
+  int64_t elapsed = now - last_time;
+  last_time = now;
+
   switch (shooting_data.state) {
     case DELAY_STATE:
-      shooting_data.timer -= TIMER_GRANULARITY;
-      if (shooting_data.timer <= 0)
+      shooting_data.timer_us -= elapsed;
+      if (shooting_data.timer_us <= 0)
         shooting_data.state = PRESS_SHUTTER_STATE;
       break;
 
     case PRESS_SHUTTER_STATE:
       press_shutter();
       shooting_data.state = RELEASE_SHUTTER_STATE;
-      shooting_data.timer = g_exposure * 1000;
+      shooting_data.timer_us = g_exposure * 1000 * 1000;
       break;
 
     case RELEASE_SHUTTER_STATE:
-      shooting_data.timer -= TIMER_GRANULARITY;
-      if (shooting_data.timer <= 0) {
+      shooting_data.timer_us -= elapsed;
+      MG_INFO(("Elapsed: %lld %lld", elapsed, shooting_data.timer_us));
+      if (shooting_data.timer_us <= TIMER_GRANULARITY*1000) {
+        if (shooting_data.timer_us > 0 && usleep(shooting_data.timer_us) < 0)
+          MG_INFO(("failed to usleep"));
         release_shutter();
 
         if (++g_frames_taken < g_frames) {
           shooting_data.state = INTERVAL_STATE;
-          shooting_data.timer = g_interval * 1000;
+          shooting_data.timer_us = g_interval * 1000 * 1000;
         } else {
           shooting_data.state = END_STATE;
         }
@@ -322,8 +339,8 @@ static void shooting_timer(void* data) {
       break;
 
     case INTERVAL_STATE:
-      shooting_data.timer -= TIMER_GRANULARITY;
-      if (shooting_data.timer <= 0)
+      shooting_data.timer_us -= elapsed;
+      if (shooting_data.timer_us <= 0)
         shooting_data.state = PRESS_SHUTTER_STATE;
       break;
 
@@ -338,7 +355,7 @@ static void start_shooting(struct mg_mgr *mgr) {
   g_frames_taken = 0;
 
   shooting_data.state = DELAY_STATE;
-  shooting_data.timer = g_delay * 1000;
+  shooting_data.timer_us = g_delay * 1000 * 1000;
 }
 
 static void evt_handler(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
@@ -475,7 +492,7 @@ int main(int argc, char* argv[]) {
   mg_http_listen(&mgr, s_http_addr, evt_handler, NULL);
 
   for (;;) {
-    mg_mgr_poll(&mgr, TIMER_GRANULARITY);
+    mg_mgr_poll(&mgr, TIMER_GRANULARITY/2);
 
     if (g_initialized)
       EdsGetEvent();
