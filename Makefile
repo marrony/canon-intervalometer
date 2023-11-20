@@ -23,6 +23,7 @@ DEPS += bin/libEDSDK.so
 endif
 
 all: bin
+	rm -rf web-ui/dist/*
 	cd web-ui && npm run build
 	mkdir -p bin/web_root
 	rm -rf bin/web_root

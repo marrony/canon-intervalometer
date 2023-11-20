@@ -19,6 +19,13 @@
 
 extern __uint64_t __thread_selfid( void );
 
+static int64_t get_system_micros() {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return tv.tv_sec*1000000ll + tv.tv_usec;
+}
+
+
 static const char *s_http_addr = "http://0.0.0.0:8000";  // HTTP port
 static char s_root_dir[PATH_MAX+1] = {0};
 
@@ -249,9 +256,11 @@ EdsError EDSCALLBACK handleSateEvent(EdsStateEvent event, EdsUInt32 parameter, E
     }                                                  \
   } while (false)
 
+static int64_t shutter_pressed;
 static void press_shutter() {
   EdsCameraRef camera = g_cameras[g_camera - 1].camera;
 
+  shutter_pressed = get_system_micros();
   EdsSendCommand(
     camera,
     kEdsCameraCommand_PressShutterButton,
@@ -262,6 +271,8 @@ static void press_shutter() {
 static void release_shutter() {
   EdsCameraRef camera = g_cameras[g_camera - 1].camera;
 
+  int64_t delta = get_system_micros() - shutter_pressed;
+  MG_INFO(("Exposure %lld", delta));
   EdsSendCommand(
     camera,
     kEdsCameraCommand_PressShutterButton,
@@ -292,13 +303,7 @@ static struct shooting_data_t shooting_data = {
   .timer_us = 0
 };
 
-#define TIMER_GRANULARITY 500
-
-static int64_t get_system_micros() {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return tv.tv_sec*1000000ll + tv.tv_usec;
-}
+#define TIMER_GRANULARITY 100
 
 //todo: calculate the real elapsed time
 static void shooting_timer(void* data) {
@@ -325,8 +330,13 @@ static void shooting_timer(void* data) {
       shooting_data.timer_us -= elapsed;
       MG_INFO(("Elapsed: %lld %lld", elapsed, shooting_data.timer_us));
       if (shooting_data.timer_us <= TIMER_GRANULARITY*1000) {
-        if (shooting_data.timer_us > 0 && usleep(shooting_data.timer_us) < 0)
-          MG_INFO(("failed to usleep"));
+        if (shooting_data.timer_us > 0) {
+          MG_INFO(("Sleeping: %lld", shooting_data.timer_us));
+
+          if (usleep(shooting_data.timer_us) < 0)
+            MG_INFO(("failed to usleep"));
+        }
+
         release_shutter();
 
         if (++g_frames_taken < g_frames) {
@@ -348,6 +358,7 @@ static void shooting_timer(void* data) {
       g_shooting = false;
       break;
   }
+  last_time = get_system_micros();
 }
 
 static void start_shooting(struct mg_mgr *mgr) {
@@ -486,7 +497,7 @@ int main(int argc, char* argv[]) {
   fix_root_dir(argv[0]);
 
   struct mg_mgr mgr;
-  mg_log_set(MG_LL_DEBUG);
+  mg_log_set(MG_LL_INFO);
   mg_mgr_init(&mgr);
   mg_timer_add(&mgr, TIMER_GRANULARITY, MG_TIMER_REPEAT, shooting_timer, &mgr);
   mg_http_listen(&mgr, s_http_addr, evt_handler, NULL);
