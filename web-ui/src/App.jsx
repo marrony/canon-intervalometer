@@ -30,24 +30,18 @@ const defaultState = {
   interval: 0,
   frames: 0,
   hold: false,
-  camera: undefined,
   connected: false,
   shooting: false,
+  camera: 0,
 };
 
 function App() {
   const [ state, setState ] = useState(defaultState);
-  const [ cameras, setCameras ] = useState([]);
+  const [ cameraList, setCameraList ] = useState([]);
 
   const onChangeState = (value, field) => {
     setState(prev => {
       return {...prev, [field]: value};
-    });
-  };
-
-  const onChangeState2 = (s) => {
-    setState(prev => {
-      return {...prev, ...s};
     });
   };
 
@@ -63,13 +57,15 @@ function App() {
     console.log(json);
 
     if (json.status === 'success') {
-      setCameras(json.cameras);
+      setCameraList(json.cameras);
+      setState(json.state);
 
       if (json.cameras.length > 0) {
-        onChangeState(json.cameras[0].id, 'camera')
+        onChangeState(json.cameras[0].id, 'camera');
       }
     } else {
-      setCameras([]);
+      setCameraList([]);
+      setState(defaultState);
     }
   };
 
@@ -91,8 +87,7 @@ function App() {
 
     switch (json.status) {
       case 'success':
-        const state = json.state;
-        onChangeState2({ ...state, connected: true });
+        setState(json.state);
         break;
 
       case 'failure':
@@ -199,7 +194,24 @@ function App() {
       onChangeState(false, 'shooting');
   };
 
-  const camerasOptions = cameras.map(camera => {
+  const takePicture = async () => {
+    event.preventDefault();
+
+    const response = await fetch(
+      `${backendUrl}/api/camera/take-picture`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          camera: state.camera
+        })
+      }
+    );
+
+    const json = await response.json();
+    console.log(json);
+  };
+
+  const camerasOptions = cameraList.map(camera => {
     return (
       <MenuItem key={`camera-${camera.id}`} value={camera.id}>
         {camera.description}
@@ -213,7 +225,7 @@ function App() {
         <InputLabel id="camera-select-label">Camera</InputLabel>
         <Select
           labelId="camera-select-label"
-          value={state.camera ?? ''}
+          value={state.camera !== 0 ? state.camera : ''}
           label="Camera"
           disabled={state.connected}
           onChange={ (e) => {
@@ -231,7 +243,7 @@ function App() {
           <RefreshIcon />
         </IconButton>
 
-        {state.camera && !state.connected && (
+        {state.camera !== 0 && !state.connected && (
           <Button
             onClick={connectCamera}
           >
@@ -239,7 +251,7 @@ function App() {
           </Button>
         )}
 
-        {state.camera && state.connected && (
+        {state.camera !== 0 && state.connected && (
           <Button
             disabled={state.shooting}
             onClick={disconnectCamera}
@@ -311,6 +323,12 @@ function App() {
             onClick={stopShooting}
           >Stop</Button>
         )}
+
+        <Button
+          disabled={!state.connected}
+          variant="contained"
+          onClick={takePicture}
+        >Take Picture</Button>
       </div>
     </div>
   )
