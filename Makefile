@@ -42,6 +42,8 @@ ifeq ($(UNAME_S),Darwin)
 web_root_deps += build_dist
 endif
 
+web_root_deps += $(wildcard web-ui/dist/*)
+
 bin/web_root: $(web_root_deps)
 	mkdir -p bin/web_root
 	rm -rf bin/web_root/*

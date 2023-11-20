@@ -19,12 +19,29 @@
 
 extern __uint64_t __thread_selfid( void );
 
+#if 1
+static int64_t get_system_nanos() {
+  struct timespec ts = {0, 0};
+#if defined(CLOCK_MONOTONIC_RAW)
+  clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+#elif defined(CLOCK_MONOTONIC)
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+#else
+  clock_gettime(CLOCK_REALTIME, &ts);
+#endif
+  return (int64_t) ts.tv_sec * 1000000000 + (int64_t) ts.tv_nsec;
+}
+
+static int64_t get_system_micros() {
+  return get_system_nanos() / 1000;
+}
+#else
 static int64_t get_system_micros() {
   struct timeval tv;
   gettimeofday(&tv, NULL);
   return tv.tv_sec*1000000ll + tv.tv_usec;
 }
-
+#endif
 
 static const char *s_http_addr = "http://0.0.0.0:8000";  // HTTP port
 static char s_root_dir[PATH_MAX+1] = {0};
@@ -303,7 +320,7 @@ static struct shooting_data_t shooting_data = {
   .timer_us = 0
 };
 
-#define TIMER_GRANULARITY 100
+#define TIMER_GRANULARITY_MS 100
 
 //todo: calculate the real elapsed time
 static void shooting_timer(void* data) {
@@ -329,7 +346,7 @@ static void shooting_timer(void* data) {
     case RELEASE_SHUTTER_STATE:
       shooting_data.timer_us -= elapsed;
       MG_INFO(("Elapsed: %lld %lld", elapsed, shooting_data.timer_us));
-      if (shooting_data.timer_us <= TIMER_GRANULARITY*1000) {
+      if (shooting_data.timer_us <= TIMER_GRANULARITY_MS*1000) {
         if (shooting_data.timer_us > 0) {
           MG_INFO(("Sleeping: %lld", shooting_data.timer_us));
 
@@ -497,13 +514,13 @@ int main(int argc, char* argv[]) {
   fix_root_dir(argv[0]);
 
   struct mg_mgr mgr;
-  mg_log_set(MG_LL_INFO);
+  mg_log_set(MG_LL_DEBUG);
   mg_mgr_init(&mgr);
-  mg_timer_add(&mgr, TIMER_GRANULARITY, MG_TIMER_REPEAT, shooting_timer, &mgr);
+  mg_timer_add(&mgr, TIMER_GRANULARITY_MS, MG_TIMER_REPEAT, shooting_timer, &mgr);
   mg_http_listen(&mgr, s_http_addr, evt_handler, NULL);
 
   for (;;) {
-    mg_mgr_poll(&mgr, TIMER_GRANULARITY/2);
+    mg_mgr_poll(&mgr, TIMER_GRANULARITY_MS);
 
     if (g_initialized)
       EdsGetEvent();
