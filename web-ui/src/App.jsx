@@ -21,7 +21,11 @@ import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 // hold: on/off
 
 const backendUrl = (() => {
-  return import.meta.env.VITE_BACKEND_URL ?? location.origin;
+  const url = import.meta.env.VITE_BACKEND_URL;
+
+  if (url && url !== "") return url;
+
+  return location.origin;
 })();
 
 const defaultState = {
@@ -179,7 +183,8 @@ function App() {
 
   useEffect(() => {
     if (state.shooting) {
-      const timer = setInterval(poolShooting, 1000);
+      const poolingTime = import.meta.env.VITE_POOLING_TIME ?? 1000;
+      const timer = setInterval(poolShooting, poolingTime);
       return () => clearInterval(timer);
     }
   }, [state.shooting]);

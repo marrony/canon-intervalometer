@@ -1,13 +1,19 @@
-#include <stdlib.h>
-#include <stdbool.h>
-#include <libgen.h>
-#include <pthread.h>
 #include <EDSDK.h>
 #include <EDSDKTypes.h>
+#include <libgen.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 #include "mongoose.h"
 
-extern __uint64_t __thread_selfid( void );
+#define NANOS (MICROS * 1000ll)
+#define MICROS (MILLIS * 1000ll)
+#define MILLIS (1000ll)
+
+#if __APPLE__
+extern __uint64_t __thread_selfid(void);
+#endif
 
 static int64_t get_system_nanos() {
   struct timespec ts = {0, 0};
@@ -18,11 +24,155 @@ static int64_t get_system_nanos() {
 #else
   clock_gettime(CLOCK_REALTIME, &ts);
 #endif
-  return (int64_t) ts.tv_sec * 1000000000 + (int64_t) ts.tv_nsec;
+  return (int64_t)ts.tv_sec * NANOS + (int64_t)ts.tv_nsec;
 }
 
+static bool g_running = true;
+
+static struct {
+  pthread_mutex_t mutex;
+  long delay;
+  long exposure;
+  long interval;
+  long frames;
+  long frames_taken;
+  bool initialized;
+  bool connected;
+  bool shooting;
+  char description[EDS_MAX_NAME];
+  EdsCameraRef camera;
+} g_state = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .delay = 1,
+    .exposure = 5,
+    .interval = 1,
+    .frames = 2,
+    .frames_taken = 0,
+    .initialized = false,
+    .connected = false,
+    .shooting = false,
+    .description = {0},
+    .camera = NULL,
+};
+
+static bool is_initialized() {
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
+  bool ret = g_state.initialized;
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
+  return ret;
+}
+
+static bool is_connected() {
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
+  bool ret = g_state.connected;
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
+  return ret;
+}
+
+static bool is_shooting() {
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
+  bool ret = g_state.shooting;
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
+  return ret;
+}
+
+static pthread_t http_server;
+static pthread_t main_thread;
+
+enum command_type {
+  NO_OP,
+  INITIALIZE,
+  DEINITIALIZE,
+  CONNECT,
+  DISCONNECT,
+  TAKE_PICTURE,
+  START_SHOOTING,
+  STOP_SHOOTING,
+  TERMINATE,
+};
+
+static const char *command_names[] = {
+    "NO_OP",          "INITIALIZE",    "DEINITIALIZE",
+    "CONNECT",        "DISCONNECT",    "TAKE_PICTURE",
+    "START_SHOOTING", "STOP_SHOOTING", "TERMINATE",
+};
+
+struct initialize_cmd {};
+struct deinitialize_cmd {};
+struct terminate_cmd {};
+struct connect_cmd {};
+struct disconnect_cmd {};
+struct take_picture_cmd {};
+struct start_shooting_cmd {
+  long delay;
+  long exposure;
+  long interval;
+  long frames;
+};
+struct stop_shooting_cmd {};
+
+struct command_t {
+  enum command_type type;
+  union {
+    char raw_data[1];
+    struct initialize_cmd initialize;
+    struct deinitialize_cmd deinitialize;
+    struct terminate_cmd terminate;
+    struct connect_cmd connect;
+    struct disconnect_cmd disconnect;
+    struct take_picture_cmd take_picture;
+    struct start_shooting_cmd start_shooting;
+    struct stop_shooting_cmd stop_shooting;
+  };
+};
+
+#define DELAYS_SIZE 32
+
+static struct {
+  bool aborted;
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  int64_t delays[DELAYS_SIZE];
+  int delays_start;
+  int delays_length;
+} g_timer = {
+    .aborted = false,
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .cond = PTHREAD_COND_INITIALIZER,
+    .delays = {0},
+    .delays_start = 0,
+    .delays_length = 0,
+};
+
+static void add_delay(int64_t delay) {
+  g_timer.delays[(g_timer.delays_start + g_timer.delays_length) % DELAYS_SIZE] =
+      delay;
+
+  if (g_timer.delays_length < DELAYS_SIZE) {
+    g_timer.delays_length++;
+  } else {
+    g_timer.delays_start = (g_timer.delays_start + 1) % DELAYS_SIZE;
+  }
+}
+
+static int64_t get_delay_average() {
+  if (g_timer.delays_length == 0)
+    return 0;
+
+  int64_t sum = 0;
+
+  for (int i = 0; i < g_timer.delays_length; i++)
+    sum += g_timer.delays[(g_timer.delays_start + i) % DELAYS_SIZE];
+
+  return sum / g_timer.delays_length;
+}
+
+#if 0
 static int nssleep(int64_t timer_ns) {
-  struct timespec ts = {0, timer_ns};
+  struct timespec ts = {
+    .tv_sec = timer_ns / NANOS,
+    .tv_nsec = timer_ns % NANOS
+  };
   struct timespec rem = {0, 0};
 
   while (nanosleep(&ts, &rem) < 0) {
@@ -33,189 +183,111 @@ static int nssleep(int64_t timer_ns) {
 
   return 0;
 }
+#endif
 
-static void shooting_nssleep(int64_t timer_ns) {
-  if (timer_ns > 0 && nssleep(timer_ns) < 0)
-    MG_INFO(("failed to nssleep"));
-}
+static const char *s_http_addr = "http://0.0.0.0:8001"; // HTTP port
+static char s_root_dir[PATH_MAX + 1] = {0};
 
-static const char *s_http_addr = "http://0.0.0.0:8001";  // HTTP port
-static char s_root_dir[PATH_MAX+1] = {0};
-
-static void fix_root_dir(const char* argv) {
-  char temp_dir[PATH_MAX+1] = {0};
+static void fix_root_dir(const char *argv) {
+  char temp_dir[PATH_MAX + 1] = {0};
 
   realpath(argv, temp_dir);
   snprintf(s_root_dir, PATH_MAX, "%s/web_root", dirname(temp_dir));
 }
 
-static bool g_initialized = false;
-static bool g_connected = false;
-static bool g_shooting = false;
-static long g_camera = 0;
-static long g_delay = 5;
-static long g_exposure = 30;
-static long g_interval = 5;
-static long g_frames = 50;
-static long g_frames_taken = 0;
-
-static bool initialize() {
-  if (!g_initialized) {
-    if (EdsInitializeSDK() == EDS_ERR_OK) {
-      g_initialized = true;
-      sleep(1);
-    }
-  }
-
-  return g_initialized;
-}
-
-static void deinitialize() {
-  g_initialized = false;
-  g_connected = false;
-  g_camera = 0;
-  EdsTerminateSDK();
-}
-
-#define MAX_CAMERAS 4
-
-static EdsUInt32 g_camera_count = 0;
-struct camera_t {
-  char description[EDS_MAX_NAME];
-  EdsCameraRef camera;
-};
-static struct camera_t g_cameras[MAX_CAMERAS] = { 0 };
-
-static size_t print_cameras(void (*out)(char, void *), void *ptr, va_list *ap) {
-  size_t len = 0;
-
-  for (EdsUInt32 i = 0; i < g_camera_count; i++) {
-    len += mg_xprintf(out, ptr,
-      "{%m:%d,%m:%m,%m:%d}",
-      MG_ESC("id"), i + 1,
-      MG_ESC("description"), MG_ESC(g_cameras[i].description),
-      MG_ESC("handle"), MG_ESC(g_cameras[i].camera)
-    );
-
-    if (i < g_camera_count - 1) {
-      len += mg_xprintf(out, ptr, ",");
-    }
-  }
-
-  return len;
+static size_t print_camera(void (*out)(char, void *), void *ptr, va_list *ap) {
+  return mg_xprintf(out, ptr, "{%m:%m,%m:%d}", MG_ESC("description"),
+                    MG_ESC(g_state.description), MG_ESC("handle"),
+                    g_state.camera);
 }
 
 static size_t print_state(void (*out)(char, void *), void *ptr, va_list *ap) {
-  return mg_xprintf(out, ptr,
-    "{%m:%s,%m:%s,%m:%ld,%m:%ld,%m:%ld,%m:%ld,%m:%ld,%m:%ld}",
-    MG_ESC("shooting"), g_shooting ? "true" : "false",
-    MG_ESC("connected"), g_connected ? "true" : "false",
-    MG_ESC("camera"), g_camera,
-    MG_ESC("delay"), g_delay,
-    MG_ESC("exposure"), g_exposure,
-    MG_ESC("interval"), g_interval,
-    MG_ESC("frames"), g_frames,
-    MG_ESC("frames_taken"), g_frames_taken
-  );
+  return mg_xprintf(
+      out, ptr, "{%m:%s,%m:%s,%m:%ld,%m:%ld,%m:%ld,%m:%ld,%m:%ld}",
+      MG_ESC("shooting"), g_state.shooting ? "true" : "false",
+      MG_ESC("connected"), g_state.connected ? "true" : "false",
+      MG_ESC("delay"), g_state.delay, MG_ESC("exposure"), g_state.exposure,
+      MG_ESC("interval"), g_state.interval, MG_ESC("frames"), g_state.frames,
+      MG_ESC("frames_taken"), g_state.frames_taken);
 }
 
-static void serialize_state(struct mg_connection* c) {
-  mg_http_reply(
-    c, 200,
-    "Content-Type: application/json\r\n"
-    "Access-Control-Allow-Origin: *\r\n",
-    "{%m:%m,%m:%M}\n",
-    MG_ESC("status"), MG_ESC("success"),
-    MG_ESC("state"), print_state
-  );
+static void serialize_state(struct mg_connection *c) {
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
+  mg_http_reply(c, 200,
+                "Content-Type: application/json\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "{%m:%m,%m:%M}\n", MG_ESC("status"), MG_ESC("success"),
+                MG_ESC("state"), print_state);
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
-static void serialize_camera_list(struct mg_connection* c) {
-  mg_http_reply(
-    c, 200,
-    "Content-Type: application/json\r\n"
-    "Access-Control-Allow-Origin: *\r\n",
-    "{%m:%m,%m:[%M],%m:%M}\n",
-    MG_ESC("status"), MG_ESC("success"),
-    MG_ESC("cameras"), print_cameras,
-    MG_ESC("state"), print_state
-  );
+static void serialize_camera(struct mg_connection *c) {
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
+  mg_http_reply(c, 200,
+                "Content-Type: application/json\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "{%m:%m,%m:%M,%m:%M}\n", MG_ESC("status"), MG_ESC("success"),
+                MG_ESC("camera"), print_camera, MG_ESC("state"), print_state);
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
-static void internal_server_error(struct mg_connection* c) {
-  mg_http_reply(
-    c, 500,
-    "Content-Type: application/json\r\n"
-    "Access-Control-Allow-Origin: *\r\n",
-    "{\"status\": \"failure\"}\n"
-  );
+static void serialize_success(struct mg_connection *c) {
+  mg_http_reply(c, 200,
+                "Content-Type: application/json\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "{%m:%m}\n", MG_ESC("status"), MG_ESC("success"));
 }
 
-static void serialize_success(struct mg_connection* c) {
-  mg_http_reply(
-    c, 200,
-    "Content-Type: application/json\r\n"
-    "Access-Control-Allow-Origin: *\r\n",
-    "{%m:%m}\n",
-    MG_ESC("status"), MG_ESC("success")
-  );
+static void serialize_failure(struct mg_connection *c,
+                              const char *description) {
+  mg_http_reply(c, 200,
+                "Content-Type: application/json\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "{%m:%m,%m:%m}\n", MG_ESC("status"), MG_ESC("failure"),
+                MG_ESC("description"), MG_ESC(description));
 }
 
-static void serialize_failure(struct mg_connection* c, const char* description) {
-  mg_http_reply(
-    c, 200,
-    "Content-Type: application/json\r\n"
-    "Access-Control-Allow-Origin: *\r\n",
-    "{%m:%m,%m:%m}\n",
-    MG_ESC("status"), MG_ESC("failure"),
-    MG_ESC("description"), MG_ESC(description)
-  );
+static void not_found(struct mg_connection *c) {
+  mg_http_reply(c, 404, "Access-Control-Allow-Origin: *\r\n", "Not Found");
 }
 
-static void not_found(struct mg_connection* c) {
-  mg_http_reply(
-    c, 404,
-    "Access-Control-Allow-Origin: *\r\n",
-    "Not Found"
-  );
-}
-
-static bool build_camera_list() {
-  if (!g_initialized) {
-    return false;
-  }
-
+static bool detect_connected_camera() {
   EdsCameraListRef camera_list = NULL;
 
   if (EdsGetCameraList(&camera_list) == EDS_ERR_OK) {
     EdsUInt32 count = 0;
 
     if (EdsGetChildCount(camera_list, &count) == EDS_ERR_OK) {
-      if (count == 0 || count > MAX_CAMERAS) {
+      MG_DEBUG(("Camera count: %d", count));
+
+      if (count != 1) {
         EdsRelease(camera_list);
         return false;
       }
 
-      for (EdsUInt32 i = 0; i < count; i++) {
-        EdsCameraRef camera_ref = NULL;
-        EdsDeviceInfo device_info;
+      if (g_state.camera != NULL) {
+        EdsRelease(g_state.camera);
+        g_state.camera = NULL;
+      }
 
-        if (EdsGetChildAtIndex(camera_list, i, &camera_ref) == EDS_ERR_OK) {
-          if (camera_ref != NULL && EdsGetDeviceInfo(camera_ref, &device_info) == EDS_ERR_OK) {
-            g_cameras[i].camera = camera_ref;
-            strncpy(g_cameras[i].description, device_info.szDeviceDescription, EDS_MAX_NAME);
-          } else {
-            EdsRelease(camera_ref);
-            EdsRelease(camera_list);
-            return false;
-          }
+      EdsCameraRef camera_ref = NULL;
+      EdsDeviceInfo device_info;
+
+      if (EdsGetChildAtIndex(camera_list, 0, &camera_ref) == EDS_ERR_OK) {
+        if (camera_ref != NULL &&
+            EdsGetDeviceInfo(camera_ref, &device_info) == EDS_ERR_OK) {
+          g_state.camera = camera_ref;
+          strncpy(g_state.description, device_info.szDeviceDescription,
+                  EDS_MAX_NAME);
         } else {
+          EdsRelease(camera_ref);
           EdsRelease(camera_list);
           return false;
         }
+      } else {
+        EdsRelease(camera_list);
+        return false;
       }
-
-      g_camera_count = count;
     } else {
       EdsRelease(camera_list);
       return false;
@@ -224,12 +296,12 @@ static bool build_camera_list() {
     return false;
   }
 
-  EdsGetEvent();
   EdsRelease(camera_list);
   return true;
 }
 
-EdsError EDSCALLBACK handleObjectEvent(EdsObjectEvent event, EdsBaseRef object, EdsVoid *context) {
+EdsError EDSCALLBACK handleObjectEvent(EdsObjectEvent event, EdsBaseRef object,
+                                       EdsVoid *context) {
   EdsError err = EDS_ERR_OK;
 
   // Object must be released if(object)
@@ -238,260 +310,510 @@ EdsError EDSCALLBACK handleObjectEvent(EdsObjectEvent event, EdsBaseRef object, 
   return err;
 }
 
-EdsError EDSCALLBACK handlePropertyEvent(
-  EdsUInt32 inEvent,
-  EdsUInt32 inPropertyID,
-  EdsUInt32 inParam,
-  EdsVoid *inContext) {
+EdsError EDSCALLBACK handlePropertyEvent(EdsUInt32 inEvent,
+                                         EdsUInt32 inPropertyID,
+                                         EdsUInt32 inParam,
+                                         EdsVoid *inContext) {
   EdsError err = EDS_ERR_OK;
   // do something
   return err;
 }
 
-EdsError EDSCALLBACK handleSateEvent(EdsStateEvent event, EdsUInt32 parameter, EdsVoid *context) {
+EdsError EDSCALLBACK handleSateEvent(EdsStateEvent event, EdsUInt32 parameter,
+                                     EdsVoid *context) {
   EdsError err = EDS_ERR_OK;
   // do something
   return err;
 }
 
-#define CHECK_INIT_AND_CONNECTED(c)                    \
-  do {                                                 \
-    if (!g_initialized) {                              \
-      return serialize_failure((c), "Not initialized");\
-    }                                                  \
-    if (!g_connected) {                                \
-      return serialize_failure((c), "Not connected");  \
-    }                                                  \
-  } while (false)
+static bool press_shutter(int64_t *ts) {
+  int64_t start = get_system_nanos();
+  EdsError err =
+      EdsSendCommand(g_state.camera, kEdsCameraCommand_PressShutterButton,
+                     kEdsCameraCommand_ShutterButton_Completely_NonAF);
+  int64_t delta = get_system_nanos() - start;
 
-static int64_t shutter_pressed;
-static void press_shutter() {
-  EdsCameraRef camera = g_cameras[g_camera - 1].camera;
-
-  EdsSendCommand(
-    camera,
-    kEdsCameraCommand_PressShutterButton,
-    kEdsCameraCommand_ShutterButton_Completely_NonAF
-  );
-  shutter_pressed = get_system_nanos();
-}
-
-static void release_shutter() {
-  EdsCameraRef camera = g_cameras[g_camera - 1].camera;
-
-  EdsSendCommand(
-    camera,
-    kEdsCameraCommand_PressShutterButton,
-    kEdsCameraCommand_ShutterButton_OFF
-  );
-  int64_t delta = get_system_nanos() - shutter_pressed;
-  MG_INFO(("Exposure %lld", delta));
-}
-
-static void take_picture() {
-  press_shutter();
-  release_shutter();
-}
-
-enum shooting_state {
-  DELAY_STATE,
-  PRESS_SHUTTER_STATE,
-  RELEASE_SHUTTER_STATE,
-  INTERVAL_STATE,
-  END_STATE
-};
-
-struct shooting_data_t {
-  enum shooting_state state;
-  int64_t timer_ns;
-};
-
-static struct shooting_data_t shooting_data = {
-  .state = END_STATE,
-  .timer_ns = 0
-};
-
-#define TIMER_GRANULARITY_MS 100
-
-//todo: calculate the real elapsed time
-static void shooting_timer(void* data) {
-  static int64_t last_time = 0;
-
-  int64_t now = get_system_nanos();
-  int64_t elapsed_ns = now - last_time;
-  last_time = now;
-
-  switch (shooting_data.state) {
-    case DELAY_STATE:
-      shooting_data.timer_ns -= elapsed_ns;
-      if (shooting_data.timer_ns <= TIMER_GRANULARITY_MS*1000*1000) {
-        shooting_nssleep(shooting_data.timer_ns);
-        shooting_data.state = PRESS_SHUTTER_STATE;
-      }
-
-      break;
-
-    case PRESS_SHUTTER_STATE:
-      press_shutter();
-      shooting_data.state = RELEASE_SHUTTER_STATE;
-      shooting_data.timer_ns = g_exposure * 1000 * 1000 * 1000;
-      break;
-
-    case RELEASE_SHUTTER_STATE:
-      shooting_data.timer_ns -= elapsed_ns;
-      if (shooting_data.timer_ns <= TIMER_GRANULARITY_MS*1000*1000) {
-        shooting_nssleep(shooting_data.timer_ns);
-        release_shutter();
-
-        if (++g_frames_taken < g_frames) {
-          shooting_data.state = INTERVAL_STATE;
-          shooting_data.timer_ns = g_interval * 1000 * 1000 * 1000;
-        } else {
-          shooting_data.state = END_STATE;
-        }
-      }
-
-      break;
-
-    case INTERVAL_STATE:
-      shooting_data.timer_ns -= elapsed_ns;
-      if (shooting_data.timer_ns <= TIMER_GRANULARITY_MS*1000*1000) {
-        shooting_nssleep(shooting_data.timer_ns);
-        shooting_data.state = PRESS_SHUTTER_STATE;
-      }
-
-      break;
-
-    case END_STATE:
-      g_shooting = false;
-      break;
+  if (err != EDS_ERR_OK) {
+    return false;
   }
 
-  last_time = get_system_nanos();
+  MG_DEBUG(("Press Button: %lld ms", delta / 1000000));
+
+  if (ts != NULL)
+    *ts = start;
+
+  return true;
 }
 
-static void start_shooting(struct mg_mgr *mgr) {
-  g_shooting = true;
-  g_frames_taken = 0;
+static bool release_shutter(int64_t *ts) {
+  int64_t start = get_system_nanos();
+  EdsError err =
+      EdsSendCommand(g_state.camera, kEdsCameraCommand_PressShutterButton,
+                     kEdsCameraCommand_ShutterButton_OFF);
+  int64_t end = get_system_nanos();
 
-  shooting_data.state = DELAY_STATE;
-  shooting_data.timer_ns = g_delay * 1000 * 1000 * 1000;
+  if (err != EDS_ERR_OK) {
+    return false;
+  }
+
+  int64_t delta = end - start;
+  MG_DEBUG(("Release Button: %lld ms", delta / 1000000));
+
+  if (ts != NULL)
+    *ts = end;
+
+  return true;
 }
 
-static void evt_handler(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
-  (void) fn_data;
+static void adjust_timer_ns(struct timespec *ts, int64_t timer_ns) {
+  clock_gettime(CLOCK_REALTIME, ts);
+
+  ts->tv_sec += timer_ns / NANOS;
+  ts->tv_nsec += timer_ns % NANOS;
+
+  ts->tv_sec += ts->tv_nsec / NANOS;
+  ts->tv_nsec = ts->tv_nsec % NANOS;
+}
+
+static bool start_timer_ns(int64_t timer_ns) {
+  MG_DEBUG(("Timer %lld", timer_ns));
+
+  struct timespec ts = {0, 0};
+  adjust_timer_ns(&ts, timer_ns);
+
+  assert(pthread_mutex_lock(&g_timer.mutex) == 0);
+  g_timer.aborted = false;
+  bool running = true;
+  while (running && !g_timer.aborted) {
+    switch (pthread_cond_timedwait(&g_timer.cond, &g_timer.mutex, &ts)) {
+    case ETIMEDOUT:
+      running = false;
+      break;
+
+    case EINVAL:
+      MG_DEBUG(("EINVAL"));
+      running = false;
+      g_timer.aborted = true;
+      break;
+    }
+  }
+  bool aborted = g_timer.aborted;
+  assert(pthread_mutex_unlock(&g_timer.mutex) == 0);
+  return !aborted;
+}
+
+static void abort_timer() {
+  // at this point timer_mutex is unlock wating for the condition
+  assert(pthread_mutex_lock(&g_timer.mutex) == 0);
+  if (!g_timer.aborted)
+    pthread_cond_broadcast(&g_timer.cond);
+  g_timer.aborted = true;
+  assert(pthread_mutex_unlock(&g_timer.mutex) == 0);
+}
+
+#define BUFFER_SIZE 8
+
+struct thread_queue_t {
+  struct command_t buffer[BUFFER_SIZE];
+  int size;
+  int nextin;
+  int nextout;
+  pthread_mutex_t mutex;
+  pthread_cond_t produced;
+  pthread_cond_t consumed;
+};
+
+int enqueue_command(struct thread_queue_t *b, struct command_t *cmd) {
+  assert(pthread_mutex_lock(&b->mutex) == 0);
+
+  while (b->size >= BUFFER_SIZE)
+    assert(pthread_cond_wait(&b->consumed, &b->mutex) == 0);
+
+  assert(b->size < BUFFER_SIZE);
+
+  int nextin = b->nextin++;
+  b->nextin %= BUFFER_SIZE;
+  b->size++;
+
+  b->buffer[nextin] = *cmd;
+
+  assert(pthread_cond_signal(&b->produced) == 0);
+  assert(pthread_mutex_unlock(&b->mutex) == 0);
+
+  return nextin;
+}
+
+int dequeue_command(struct thread_queue_t *b, struct command_t *cmd,
+                    int64_t timer_ns) {
+  assert(pthread_mutex_lock(&b->mutex) == 0);
+
+  struct timespec ts = {0, 0};
+  adjust_timer_ns(&ts, timer_ns);
+
+  while (b->size <= 0) {
+    int ret = pthread_cond_timedwait(&b->produced, &b->mutex, &ts);
+    if (ret == ETIMEDOUT) {
+      assert(pthread_mutex_unlock(&b->mutex) == 0);
+      return -1;
+    }
+  }
+
+  assert(b->size > 0);
+
+  int nextout = b->nextout++;
+  b->nextout %= BUFFER_SIZE;
+  b->size--;
+
+  *cmd = b->buffer[nextout];
+
+  assert(pthread_cond_signal(&b->consumed) == 0);
+  assert(pthread_mutex_unlock(&b->mutex) == 0);
+
+  return nextout;
+}
+
+struct sync_queue_t {
+  struct thread_queue_t queue;
+  pthread_mutex_t sync_mutex;
+  pthread_cond_t sync_wait;
+  int32_t processed;
+};
+
+static struct sync_queue_t g_queue = {
+    .queue =
+        {
+            .buffer = {0},
+            .size = 0,
+            .nextin = 0,
+            .nextout = 0,
+            .mutex = PTHREAD_MUTEX_INITIALIZER,
+            .produced = PTHREAD_COND_INITIALIZER,
+            .consumed = PTHREAD_COND_INITIALIZER,
+        },
+    .sync_mutex = PTHREAD_MUTEX_INITIALIZER,
+    .sync_wait = PTHREAD_COND_INITIALIZER,
+    .processed = 0,
+};
+
+static void notify_processed(int slot) {
+  assert(pthread_mutex_lock(&g_queue.sync_mutex) == 0);
+  g_queue.processed |= (1 << slot);
+  assert(pthread_cond_signal(&g_queue.sync_wait) == 0);
+  assert(pthread_mutex_unlock(&g_queue.sync_mutex) == 0);
+}
+
+static void post_command(enum command_type type, size_t cmd_size,
+                         const void *cmd_data, bool wait) {
+  assert(pthread_mutex_unlock(&g_queue.sync_mutex) == 0);
+
+  struct command_t cmd = {
+      .type = type,
+  };
+
+  if (cmd_data != NULL)
+    memcpy(cmd.raw_data, cmd_data, cmd_size);
+
+  int slot = enqueue_command(&g_queue.queue, &cmd);
+  int mask = 1 << slot;
+
+  g_queue.processed &= ~mask;
+
+  while (wait && (g_queue.processed & mask) == 0) {
+    assert(pthread_cond_wait(&g_queue.sync_wait, &g_queue.sync_mutex) == 0);
+  }
+
+  assert(pthread_mutex_unlock(&g_queue.sync_mutex) == 0);
+}
+
+static void post_command_sync(enum command_type type, size_t cmd_size,
+                              const void *cmd_data) {
+  post_command(type, cmd_size, cmd_data, true);
+}
+
+static void post_command_async(enum command_type type, size_t cmd_size,
+                               const void *cmd_data) {
+  post_command(type, cmd_size, cmd_data, false);
+}
+
+static void deinitialize_command(struct command_t *cmd) {
+  if (g_state.initialized) {
+    EdsTerminateSDK();
+  }
+  g_state.initialized = false;
+  g_state.connected = false;
+}
+
+static void initialize_command(struct command_t *cmd) {
+  if (!g_state.initialized) {
+    MG_DEBUG(("Initializing"));
+
+    if (EdsInitializeSDK() != EDS_ERR_OK) {
+      MG_DEBUG(("Error initializing SDK"));
+      return;
+    }
+
+    g_state.initialized = true;
+  } else {
+    MG_DEBUG(("Already initialized"));
+  }
+
+  MG_DEBUG(("Detecting cameras"));
+
+  if (!detect_connected_camera()) {
+    MG_DEBUG(("Error detecting camera"));
+    deinitialize_command(NULL);
+  }
+}
+
+static void set_bulb_mode() {
+  MG_DEBUG(("Setting camera to Bulb mode"));
+
+  EdsUInt32 shutterSpeed = 0x0c;
+  EdsError err = EdsSetPropertyData(g_state.camera, kEdsPropID_Tv, 0,
+                                    sizeof(EdsUInt32), &shutterSpeed);
+
+  if (err != EDS_ERR_OK) {
+    MG_DEBUG(("Error setting camera to Bulb mode"));
+  }
+}
+
+static void lock_ui() {
+  EdsError err =
+      EdsSendStatusCommand(g_state.camera, kEdsCameraStatusCommand_UILock, 0);
+
+  if (err != EDS_ERR_OK) {
+    MG_DEBUG(("Error locking UI"));
+  }
+}
+
+static void unlock_ui() {
+  EdsError err =
+      EdsSendStatusCommand(g_state.camera, kEdsCameraStatusCommand_UIUnLock, 0);
+
+  if (err != EDS_ERR_OK) {
+    MG_DEBUG(("Error unlocking UI"));
+  }
+}
+
+static void connect_command(struct command_t *cmd) {
+  if (g_state.connected) {
+    MG_DEBUG(("Already connected"));
+    return;
+  }
+
+  MG_DEBUG(("Connecting to %s", g_state.description));
+
+  if (EdsOpenSession(g_state.camera) == EDS_ERR_OK) {
+    set_bulb_mode();
+    lock_ui();
+    g_state.connected = true;
+  } else {
+    MG_DEBUG(("Failed to connect to the camera"));
+    // something bad happened, deinitialize and start again
+    deinitialize_command(NULL);
+  }
+}
+
+static void disconnect_command(struct command_t *cmd) {
+  if (!g_state.connected) {
+    MG_DEBUG(("Already disconnected"));
+    return;
+  }
+
+  unlock_ui();
+
+  MG_DEBUG(("Disconnecting from %s", g_state.description));
+
+  if (EdsCloseSession(g_state.camera) != EDS_ERR_OK) {
+    // something bad happened, deinitialize and start again
+    deinitialize_command(NULL);
+  }
+
+  g_state.connected = false;
+}
+
+static void take_picture_command(struct command_t *cmd) {
+  if (g_state.exposure == 0) {
+    press_shutter(NULL);
+    release_shutter(NULL);
+  } else {
+    int64_t exposure_ns = g_state.exposure * NANOS;
+    int64_t delay_average_ns = get_delay_average();
+
+    int64_t start_ns, end_ns;
+
+    bool success = press_shutter(&start_ns);
+
+    if (success)
+      success = start_timer_ns(exposure_ns - delay_average_ns);
+
+    if (success)
+      success = release_shutter(&end_ns);
+
+    if (success)
+      add_delay((end_ns - start_ns) - exposure_ns);
+  }
+
+  if (++g_state.frames_taken < g_state.frames) {
+    start_timer_ns(g_state.interval * NANOS);
+    post_command_async(TAKE_PICTURE, 0, NULL);
+  } else {
+    g_state.shooting = false;
+  }
+}
+
+static void start_shooting_command(struct command_t *cmd) {
+  g_state.delay = cmd->start_shooting.delay;
+  g_state.interval = cmd->start_shooting.interval;
+  g_state.exposure = cmd->start_shooting.exposure;
+  g_state.frames = cmd->start_shooting.frames;
+  g_state.frames_taken = 0;
+  g_state.shooting = true;
+
+  if (g_state.delay > 0)
+    start_timer_ns(g_state.delay * NANOS);
+
+  post_command_async(TAKE_PICTURE, 0, NULL);
+}
+
+static void stop_shooting_command(struct command_t *cmd) {
+  abort_timer();
+  g_state.shooting = false;
+}
+
+static void shooting_state_machine() {
+  while (g_running) {
+    struct command_t cmd = {
+        .type = NO_OP,
+    };
+
+    int slot = dequeue_command(&g_queue.queue, &cmd, 500 * MICROS);
+
+    if (slot < 0) {
+      EdsGetEvent();
+      continue;
+    }
+
+    MG_DEBUG(("Command: %s on slot %d", command_names[cmd.type], slot));
+
+    switch (cmd.type) {
+    case NO_OP:
+      break;
+
+    case INITIALIZE:
+      initialize_command(&cmd);
+      break;
+
+    case DEINITIALIZE:
+      deinitialize_command(&cmd);
+      break;
+
+    case CONNECT:
+      connect_command(&cmd);
+      break;
+
+    case DISCONNECT:
+      disconnect_command(&cmd);
+      break;
+
+    case TAKE_PICTURE:
+      take_picture_command(&cmd);
+      break;
+
+    case START_SHOOTING:
+      start_shooting_command(&cmd);
+      break;
+
+    case STOP_SHOOTING:
+      stop_shooting_command(&cmd);
+      break;
+
+    case TERMINATE:
+      g_running = false;
+      break;
+    }
+
+    notify_processed(slot);
+  }
+}
+
+static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
+                        void *fn_data) {
+  (void)fn_data;
 
   if (ev == MG_EV_POLL) {
   }
 
   if (ev == MG_EV_HTTP_MSG) {
-    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    struct mg_http_message *hm = (struct mg_http_message *)ev_data;
     struct mg_str method = hm->method;
 
     bool is_get = mg_vcmp(&method, "GET") == 0;
     bool is_post = mg_vcmp(&method, "POST") == 0;
 
-    if (is_get && mg_http_match_uri(hm, "/api/cameras")) {
-      if (!initialize()) {
-        MG_INFO(("Could not initialize"));
-        return internal_server_error(c);
-      }
+    if (is_get && mg_http_match_uri(hm, "/api/camera")) {
+      post_command_sync(INITIALIZE, 0, NULL);
 
-      if (g_camera_count == 0 && !build_camera_list()) {
-        MG_INFO(("Could not build camera list"));
-        deinitialize();
-        return internal_server_error(c);
+      if (is_initialized()) {
+        serialize_camera(c);
+      } else {
+        serialize_failure(c, "No cameras detected");
       }
-
-      serialize_camera_list(c);
     } else if (is_post && mg_http_match_uri(hm, "/api/camera/connect")) {
-      if (!g_initialized) {
-        return serialize_failure(c, "Not initialized");
-      }
+      post_command_sync(CONNECT, 0, NULL);
 
-      if (g_connected) {
-        return serialize_failure(c, "Already connected");
-      }
-
-      struct mg_str json = hm->body;
-
-      long camera_id = mg_json_get_long(json, "$.camera", 0);
-
-      if (camera_id <= 0 || camera_id > g_camera_count) {
-        return serialize_failure(c, "Invalid camera id");
-      }
-
-      if (EdsOpenSession(g_cameras[camera_id - 1].camera) == EDS_ERR_OK) {
-        g_connected = true;
-        g_camera = camera_id;
-
+      if (is_connected()) {
         serialize_state(c);
       } else {
         serialize_failure(c, "Error connecting to the camera");
       }
     } else if (is_post && mg_http_match_uri(hm, "/api/camera/disconnect")) {
-      if (!g_initialized) {
-        return serialize_failure(c, "Not initialized");
+      post_command_sync(DISCONNECT, 0, NULL);
+
+      if (!is_connected()) {
+        serialize_state(c);
+      } else {
+        serialize_failure(c, "Failed to disconnect to the camera");
       }
-
-      struct mg_str json = hm->body;
-
-      long camera_id = mg_json_get_long(json, "$.camera", 0);
-
-      if (camera_id <= 0 || camera_id > g_camera_count) {
-        return serialize_failure(c, "Invalid camera id");
-      }
-
-      g_connected = false;
-
-      if (EdsCloseSession(g_cameras[camera_id - 1].camera) == EDS_ERR_OK) {
-        //
-      }
-
-      serialize_success(c);
     } else if (is_post && mg_http_match_uri(hm, "/api/camera/start-shoot")) {
-      CHECK_INIT_AND_CONNECTED(c);
-
       struct mg_str json = hm->body;
 
-      long camera_id = mg_json_get_long(json, "$.camera", 0);
-      g_delay = mg_json_get_long(json, "$.delay", -1);
-      g_exposure = mg_json_get_long(json, "$.exposure", -1);
-      g_interval = mg_json_get_long(json, "$.interval", -1);
-      g_frames = mg_json_get_long(json, "$.frames", -1);
+      long delay = mg_json_get_long(json, "$.delay", -1);
+      long exposure = mg_json_get_long(json, "$.exposure", -1);
+      long interval = mg_json_get_long(json, "$.interval", -1);
+      long frames = mg_json_get_long(json, "$.frames", -1);
 
-      if (
-        camera_id <= 0 || g_delay < 0 || g_exposure < 0 ||
-        g_interval < 0 || g_frames < 0) {
+      if (delay < 0 || exposure < 0 || interval < 0 || frames < 0) {
         return serialize_failure(c, "Invalid arguments");
       }
 
-      start_shooting(c->mgr);
+      struct start_shooting_cmd cmd = {
+          .delay = delay,
+          .exposure = exposure,
+          .interval = interval,
+          .frames = frames,
+      };
 
-      serialize_state(c);
-    } else if (is_post && mg_http_match_uri(hm, "/api/camera/stop-shoot")) {
-      CHECK_INIT_AND_CONNECTED(c);
+      post_command_sync(START_SHOOTING, sizeof(cmd), &cmd);
 
-      g_shooting = false;
-
-      serialize_state(c);
-    } else if (is_post && mg_http_match_uri(hm, "/api/camera/take-picture")) {
-      CHECK_INIT_AND_CONNECTED(c);
-
-      struct mg_str json = hm->body;
-
-      long camera_id = mg_json_get_long(json, "$.camera", 0);
-
-      if (camera_id <= 0 || camera_id > g_camera_count) {
-        return serialize_failure(c, "Invalid camera id");
+      if (is_shooting()) {
+        serialize_state(c);
+      } else {
+        serialize_failure(c, "Cannot start shooting");
       }
+    } else if (is_post && mg_http_match_uri(hm, "/api/camera/stop-shoot")) {
+      post_command_sync(STOP_SHOOTING, 0, NULL);
 
-      take_picture();
+      if (!is_shooting()) {
+        serialize_state(c);
+      } else {
+        serialize_failure(c, "Failed to stop shooting");
+      }
+    } else if (is_post && mg_http_match_uri(hm, "/api/camera/take-picture")) {
+      post_command_sync(TAKE_PICTURE, 0, NULL);
 
-      serialize_state(c);
-    } else if (is_post && mg_http_match_uri(hm, "/api/camera/state")) {
-      CHECK_INIT_AND_CONNECTED(c);
-
+      serialize_success(c);
+    } else if (is_get && mg_http_match_uri(hm, "/api/camera/state")) {
       serialize_state(c);
     } else if (is_get) {
       struct mg_http_serve_opts opts = {.root_dir = s_root_dir};
@@ -502,22 +824,44 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data, void *fn
   }
 }
 
-int main(int argc, char* argv[]) {
-  fix_root_dir(argv[0]);
-
+static void *http_server_thread(void *data) {
   struct mg_mgr mgr;
   mg_log_set(MG_LL_DEBUG);
   mg_mgr_init(&mgr);
-  mg_timer_add(&mgr, TIMER_GRANULARITY_MS, MG_TIMER_REPEAT, shooting_timer, &mgr);
   mg_http_listen(&mgr, s_http_addr, evt_handler, NULL);
-
-  for (;;) {
-    mg_mgr_poll(&mgr, TIMER_GRANULARITY_MS);
-
-    if (g_initialized)
-      EdsGetEvent();
+  while (g_running) {
+    mg_mgr_poll(&mgr, 1000);
   }
-
   mg_mgr_free(&mgr);
+
+  return NULL;
+}
+
+void sig_handler(int sig) {
+  post_command_async(DISCONNECT, 0, NULL);
+  post_command_async(TERMINATE, 0, NULL);
+}
+
+int main(int argc, char *argv[]) {
+  signal(SIGTERM, sig_handler);
+  signal(SIGINT, sig_handler);
+
+  fix_root_dir(argv[0]);
+
+  main_thread = pthread_self();
+
+#if 0
+  struct sched_param param = {0};
+  param.sched_priority = 99;
+  pthread_setschedparam(main_thread, SCHED_FIFO, &param);
+#endif
+
+  pthread_create(&http_server, NULL, http_server_thread, NULL);
+
+  // EDSDK demands its api call to be in the main thread on MacOS
+  shooting_state_machine();
+
+  pthread_join(http_server, NULL);
+
   return 0;
 }

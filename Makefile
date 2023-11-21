@@ -1,6 +1,6 @@
 UNAME_S := $(shell uname -s)
 
-LDFLAGS :=
+LDFLAGS := -lpthread
 CFLAGS := -Icanon-sdk/EDSDK/Header
 DEPS :=
 
@@ -23,6 +23,9 @@ CFLAGS += -DTARGET_OS_LINUX
 DEPS += bin/libEDSDK.so
 endif
 
+SRCS := src/main.c src/mongoose.c
+OBJS := $(patsubst src/%.c, bin/%.o, $(SRCS))
+
 all: bin bin/web_root bin/main
 
 .PHONY: build_dist
@@ -30,10 +33,13 @@ all: bin bin/web_root bin/main
 build_dist:
 	mkdir -p web-ui/dist
 	rm -rf web-ui/dist/*
-	cd web-ui && VITE_BACKEND_URL= npm run build
+	cd web-ui && VITE_BACKEND_URL= VITE_POOLING_TIME=2000 npm run build
 
-bin/main: bin $(DEPS) src/main.c src/mongoose.c src/mongoose.h
-	gcc -Wall -Werror src/main.c src/mongoose.c $(CFLAGS) $(LDFLAGS) -o bin/main
+bin/main: $(OBJS)
+	gcc $(LDFLAGS) -o $@ $^
+
+bin/%.o: src/%.c Makefile
+	gcc -Wall $(CFLAGS) -o $@ -c $<
 
 web_root_deps :=
 
