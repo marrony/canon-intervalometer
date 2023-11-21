@@ -1,13 +1,3 @@
-// Copyright (c) 2022 Cesanta Software Limited
-// All rights reserved
-//
-// REST basics example
-// It implements the following endpoints:
-//    /api/f1 - respond with a simple mock result
-//    /api/sum - respond with the result of adding two numbers
-//    any other URI serves static files from s_root_dir
-// Results are JSON strings
-
 #include <stdlib.h>
 #include <stdbool.h>
 #include <libgen.h>
@@ -19,7 +9,6 @@
 
 extern __uint64_t __thread_selfid( void );
 
-#if 1
 static int64_t get_system_nanos() {
   struct timespec ts = {0, 0};
 #if defined(CLOCK_MONOTONIC_RAW)
@@ -32,18 +21,25 @@ static int64_t get_system_nanos() {
   return (int64_t) ts.tv_sec * 1000000000 + (int64_t) ts.tv_nsec;
 }
 
-static int64_t get_system_micros() {
-  return get_system_nanos() / 1000;
-}
-#else
-static int64_t get_system_micros() {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return tv.tv_sec*1000000ll + tv.tv_usec;
-}
-#endif
+static int nssleep(int64_t timer_ns) {
+  struct timespec ts = {0, timer_ns};
+  struct timespec rem = {0, 0};
 
-static const char *s_http_addr = "http://0.0.0.0:8000";  // HTTP port
+  while (nanosleep(&ts, &rem) < 0) {
+    if (errno != EINTR)
+      return -1;
+    ts = rem;
+  }
+
+  return 0;
+}
+
+static void shooting_nssleep(int64_t timer_ns) {
+  if (timer_ns > 0 && nssleep(timer_ns) < 0)
+    MG_INFO(("failed to nssleep"));
+}
+
+static const char *s_http_addr = "http://0.0.0.0:8001";  // HTTP port
 static char s_root_dir[PATH_MAX+1] = {0};
 
 static void fix_root_dir(const char* argv) {
@@ -96,7 +92,7 @@ static size_t print_cameras(void (*out)(char, void *), void *ptr, va_list *ap) {
   for (EdsUInt32 i = 0; i < g_camera_count; i++) {
     len += mg_xprintf(out, ptr,
       "{%m:%d,%m:%m,%m:%d}",
-      MG_ESC("id"), i + 1, 
+      MG_ESC("id"), i + 1,
       MG_ESC("description"), MG_ESC(g_cameras[i].description),
       MG_ESC("handle"), MG_ESC(g_cameras[i].camera)
     );
@@ -207,7 +203,7 @@ static bool build_camera_list() {
         if (EdsGetChildAtIndex(camera_list, i, &camera_ref) == EDS_ERR_OK) {
           if (camera_ref != NULL && EdsGetDeviceInfo(camera_ref, &device_info) == EDS_ERR_OK) {
             g_cameras[i].camera = camera_ref;
-            strncpy(g_cameras[i].description, device_info.szDeviceDescription, EDS_MAX_NAME); 
+            strncpy(g_cameras[i].description, device_info.szDeviceDescription, EDS_MAX_NAME);
           } else {
             EdsRelease(camera_ref);
             EdsRelease(camera_list);
@@ -233,34 +229,29 @@ static bool build_camera_list() {
   return true;
 }
 
-EdsError EDSCALLBACK handleObjectEvent(EdsObjectEvent event, EdsBaseRef object, EdsVoid *context)
-{
-	EdsError err = EDS_ERR_OK;
+EdsError EDSCALLBACK handleObjectEvent(EdsObjectEvent event, EdsBaseRef object, EdsVoid *context) {
+  EdsError err = EDS_ERR_OK;
 
-	// Object must be released if(object)
-	{
-		EdsRelease(object);
-	}
-	//_syncObject->unlock();
-	return err;
+  // Object must be released if(object)
+  EdsRelease(object);
+  //_syncObject->unlock();
+  return err;
 }
 
 EdsError EDSCALLBACK handlePropertyEvent(
-	EdsUInt32 inEvent,
-	EdsUInt32 inPropertyID,
-	EdsUInt32 inParam,
-	EdsVoid *inContext)
-{
-	EdsError err = EDS_ERR_OK;
-	// do something
-	return err;
+  EdsUInt32 inEvent,
+  EdsUInt32 inPropertyID,
+  EdsUInt32 inParam,
+  EdsVoid *inContext) {
+  EdsError err = EDS_ERR_OK;
+  // do something
+  return err;
 }
 
-EdsError EDSCALLBACK handleSateEvent(EdsStateEvent event, EdsUInt32 parameter, EdsVoid *context)
-{
-	EdsError err = EDS_ERR_OK;
-	// do something
-	return err;
+EdsError EDSCALLBACK handleSateEvent(EdsStateEvent event, EdsUInt32 parameter, EdsVoid *context) {
+  EdsError err = EDS_ERR_OK;
+  // do something
+  return err;
 }
 
 #define CHECK_INIT_AND_CONNECTED(c)                    \
@@ -277,24 +268,24 @@ static int64_t shutter_pressed;
 static void press_shutter() {
   EdsCameraRef camera = g_cameras[g_camera - 1].camera;
 
-  shutter_pressed = get_system_micros();
   EdsSendCommand(
     camera,
     kEdsCameraCommand_PressShutterButton,
     kEdsCameraCommand_ShutterButton_Completely_NonAF
   );
+  shutter_pressed = get_system_nanos();
 }
 
 static void release_shutter() {
   EdsCameraRef camera = g_cameras[g_camera - 1].camera;
 
-  int64_t delta = get_system_micros() - shutter_pressed;
-  MG_INFO(("Exposure %lld", delta));
   EdsSendCommand(
     camera,
     kEdsCameraCommand_PressShutterButton,
     kEdsCameraCommand_ShutterButton_OFF
   );
+  int64_t delta = get_system_nanos() - shutter_pressed;
+  MG_INFO(("Exposure %lld", delta));
 }
 
 static void take_picture() {
@@ -312,12 +303,12 @@ enum shooting_state {
 
 struct shooting_data_t {
   enum shooting_state state;
-  int64_t timer_us;
+  int64_t timer_ns;
 };
 
 static struct shooting_data_t shooting_data = {
   .state = END_STATE,
-  .timer_us = 0
+  .timer_ns = 0
 };
 
 #define TIMER_GRANULARITY_MS 100
@@ -326,56 +317,57 @@ static struct shooting_data_t shooting_data = {
 static void shooting_timer(void* data) {
   static int64_t last_time = 0;
 
-  int64_t now = get_system_micros();
-  int64_t elapsed = now - last_time;
+  int64_t now = get_system_nanos();
+  int64_t elapsed_ns = now - last_time;
   last_time = now;
 
   switch (shooting_data.state) {
     case DELAY_STATE:
-      shooting_data.timer_us -= elapsed;
-      if (shooting_data.timer_us <= 0)
+      shooting_data.timer_ns -= elapsed_ns;
+      if (shooting_data.timer_ns <= TIMER_GRANULARITY_MS*1000*1000) {
+        shooting_nssleep(shooting_data.timer_ns);
         shooting_data.state = PRESS_SHUTTER_STATE;
+      }
+
       break;
 
     case PRESS_SHUTTER_STATE:
       press_shutter();
       shooting_data.state = RELEASE_SHUTTER_STATE;
-      shooting_data.timer_us = g_exposure * 1000 * 1000;
+      shooting_data.timer_ns = g_exposure * 1000 * 1000 * 1000;
       break;
 
     case RELEASE_SHUTTER_STATE:
-      shooting_data.timer_us -= elapsed;
-      MG_INFO(("Elapsed: %lld %lld", elapsed, shooting_data.timer_us));
-      if (shooting_data.timer_us <= TIMER_GRANULARITY_MS*1000) {
-        if (shooting_data.timer_us > 0) {
-          MG_INFO(("Sleeping: %lld", shooting_data.timer_us));
-
-          if (usleep(shooting_data.timer_us) < 0)
-            MG_INFO(("failed to usleep"));
-        }
-
+      shooting_data.timer_ns -= elapsed_ns;
+      if (shooting_data.timer_ns <= TIMER_GRANULARITY_MS*1000*1000) {
+        shooting_nssleep(shooting_data.timer_ns);
         release_shutter();
 
         if (++g_frames_taken < g_frames) {
           shooting_data.state = INTERVAL_STATE;
-          shooting_data.timer_us = g_interval * 1000 * 1000;
+          shooting_data.timer_ns = g_interval * 1000 * 1000 * 1000;
         } else {
           shooting_data.state = END_STATE;
         }
       }
+
       break;
 
     case INTERVAL_STATE:
-      shooting_data.timer_us -= elapsed;
-      if (shooting_data.timer_us <= 0)
+      shooting_data.timer_ns -= elapsed_ns;
+      if (shooting_data.timer_ns <= TIMER_GRANULARITY_MS*1000*1000) {
+        shooting_nssleep(shooting_data.timer_ns);
         shooting_data.state = PRESS_SHUTTER_STATE;
+      }
+
       break;
 
     case END_STATE:
       g_shooting = false;
       break;
   }
-  last_time = get_system_micros();
+
+  last_time = get_system_nanos();
 }
 
 static void start_shooting(struct mg_mgr *mgr) {
@@ -383,7 +375,7 @@ static void start_shooting(struct mg_mgr *mgr) {
   g_frames_taken = 0;
 
   shooting_data.state = DELAY_STATE;
-  shooting_data.timer_us = g_delay * 1000 * 1000;
+  shooting_data.timer_ns = g_delay * 1000 * 1000 * 1000;
 }
 
 static void evt_handler(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
@@ -453,7 +445,7 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data, void *fn
       g_connected = false;
 
       if (EdsCloseSession(g_cameras[camera_id - 1].camera) == EDS_ERR_OK) {
-        // 
+        //
       }
 
       serialize_success(c);

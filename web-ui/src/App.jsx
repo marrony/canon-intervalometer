@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import {
   Button,
   ButtonGroup,
@@ -35,9 +35,23 @@ const defaultState = {
   camera: 0,
 };
 
+// workaround to avoid https://react.dev/blog/2022/03/29/react-v18#new-strict-mode-behaviors
+function useOnMountUnsafe(effect) {
+  const initialized = useRef(false)
+
+  useEffect(() => {
+    if (!initialized.current) {
+      initialized.current = true
+      effect()
+    }
+  }, []);
+}
+
 function App() {
   const [ state, setState ] = useState(defaultState);
   const [ cameraList, setCameraList ] = useState([]);
+
+  useOnMountUnsafe(() => refreshCameras());
 
   const onChangeState = (value, field) => {
     setState(prev => {
@@ -45,9 +59,7 @@ function App() {
     });
   };
 
-  const refreshCameras = async (event) => {
-    event.preventDefault();
-
+  const refreshCameras = async () => {
     const response = await fetch(
       `${backendUrl}/api/cameras`,
       { method: "GET" }
@@ -69,9 +81,7 @@ function App() {
     }
   };
 
-  const connectCamera = async (event) => {
-    event.preventDefault();
-
+  const connectCamera = async () => {
     const response = await fetch(
       `${backendUrl}/api/camera/connect`,
       {
