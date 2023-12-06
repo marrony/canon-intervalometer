@@ -68,3 +68,6 @@ bin:
 sync:
 	git submodule sync
 	git submodule update --init --recursive --remote
+
+cppcheck:
+	cppcheck --force --enable=all --suppress=missingIncludeSystem --std=c99 $(CFLAGS) src/main.c

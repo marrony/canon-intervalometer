@@ -1,5 +1,4 @@
 #include <EDSDK.h>
-#include <EDSDKTypes.h>
 #include <libgen.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -11,7 +10,7 @@
 #define MICROS (MILLIS * 1000ll)
 #define MILLIS (1000ll)
 
-#if __APPLE__
+#ifdef __MACOS__
 extern __uint64_t __thread_selfid(void);
 #endif
 
@@ -91,39 +90,18 @@ enum command_type {
   TERMINATE,
 };
 
-static const char *command_names[] = {
-    "NO_OP",          "INITIALIZE",    "DEINITIALIZE",
-    "CONNECT",        "DISCONNECT",    "TAKE_PICTURE",
-    "START_SHOOTING", "STOP_SHOOTING", "TERMINATE",
-};
-
-struct initialize_cmd {};
-struct deinitialize_cmd {};
-struct terminate_cmd {};
-struct connect_cmd {};
-struct disconnect_cmd {};
-struct take_picture_cmd {};
 struct start_shooting_cmd {
   long delay;
   long exposure;
   long interval;
   long frames;
 };
-struct stop_shooting_cmd {};
 
 struct command_t {
   enum command_type type;
   union {
-    char raw_data[1];
-    struct initialize_cmd initialize;
-    struct deinitialize_cmd deinitialize;
-    struct terminate_cmd terminate;
-    struct connect_cmd connect;
-    struct disconnect_cmd disconnect;
-    struct take_picture_cmd take_picture;
     struct start_shooting_cmd start_shooting;
-    struct stop_shooting_cmd stop_shooting;
-  };
+  } cmd_data;
 };
 
 #define DELAYS_SIZE 32
@@ -300,6 +278,7 @@ static bool detect_connected_camera() {
   return true;
 }
 
+#if 0
 EdsError EDSCALLBACK handleObjectEvent(EdsObjectEvent event, EdsBaseRef object,
                                        EdsVoid *context) {
   EdsError err = EDS_ERR_OK;
@@ -325,6 +304,7 @@ EdsError EDSCALLBACK handleSateEvent(EdsStateEvent event, EdsUInt32 parameter,
   // do something
   return err;
 }
+#endif
 
 static bool press_shutter(int64_t *ts) {
   int64_t start = get_system_nanos();
@@ -423,7 +403,7 @@ struct thread_queue_t {
   pthread_cond_t consumed;
 };
 
-int enqueue_command(struct thread_queue_t *b, struct command_t *cmd) {
+int enqueue_command(struct thread_queue_t *b, const struct command_t *cmd) {
   assert(pthread_mutex_lock(&b->mutex) == 0);
 
   while (b->size >= BUFFER_SIZE)
@@ -443,6 +423,13 @@ int enqueue_command(struct thread_queue_t *b, struct command_t *cmd) {
   return nextin;
 }
 
+/**
+ \brief Enqueue command
+ \param[b] test
+ \param[cmd] blah
+ \param[timer_ns] what?
+ \returns something
+ */
 int dequeue_command(struct thread_queue_t *b, struct command_t *cmd,
                     int64_t timer_ns) {
   assert(pthread_mutex_lock(&b->mutex) == 0);
@@ -504,14 +491,14 @@ static void notify_processed(int slot) {
 
 static void post_command(enum command_type type, size_t cmd_size,
                          const void *cmd_data, bool wait) {
-  assert(pthread_mutex_unlock(&g_queue.sync_mutex) == 0);
+  assert(pthread_mutex_lock(&g_queue.sync_mutex) == 0);
 
   struct command_t cmd = {
       .type = type,
   };
 
   if (cmd_data != NULL)
-    memcpy(cmd.raw_data, cmd_data, cmd_size);
+    memcpy(&cmd.cmd_data, cmd_data, cmd_size);
 
   int slot = enqueue_command(&g_queue.queue, &cmd);
   int mask = 1 << slot;
@@ -535,7 +522,9 @@ static void post_command_async(enum command_type type, size_t cmd_size,
   post_command(type, cmd_size, cmd_data, false);
 }
 
-static void deinitialize_command(struct command_t *cmd) {
+static void no_op_command(const struct command_t *cmd) {}
+
+static void deinitialize_command(const struct command_t *cmd) {
   if (g_state.initialized) {
     EdsTerminateSDK();
   }
@@ -543,7 +532,7 @@ static void deinitialize_command(struct command_t *cmd) {
   g_state.connected = false;
 }
 
-static void initialize_command(struct command_t *cmd) {
+static void initialize_command(const struct command_t *cmd) {
   if (!g_state.initialized) {
     MG_DEBUG(("Initializing"));
 
@@ -595,7 +584,7 @@ static void unlock_ui() {
   }
 }
 
-static void connect_command(struct command_t *cmd) {
+static void connect_command(const struct command_t *cmd) {
   if (g_state.connected) {
     MG_DEBUG(("Already connected"));
     return;
@@ -614,7 +603,7 @@ static void connect_command(struct command_t *cmd) {
   }
 }
 
-static void disconnect_command(struct command_t *cmd) {
+static void disconnect_command(const struct command_t *cmd) {
   if (!g_state.connected) {
     MG_DEBUG(("Already disconnected"));
     return;
@@ -632,7 +621,7 @@ static void disconnect_command(struct command_t *cmd) {
   g_state.connected = false;
 }
 
-static void take_picture_command(struct command_t *cmd) {
+static void take_picture_command(const struct command_t *cmd) {
   if (g_state.exposure == 0) {
     press_shutter(NULL);
     release_shutter(NULL);
@@ -662,11 +651,11 @@ static void take_picture_command(struct command_t *cmd) {
   }
 }
 
-static void start_shooting_command(struct command_t *cmd) {
-  g_state.delay = cmd->start_shooting.delay;
-  g_state.interval = cmd->start_shooting.interval;
-  g_state.exposure = cmd->start_shooting.exposure;
-  g_state.frames = cmd->start_shooting.frames;
+static void start_shooting_command(const struct command_t *cmd) {
+  g_state.delay = cmd->cmd_data.start_shooting.delay;
+  g_state.interval = cmd->cmd_data.start_shooting.interval;
+  g_state.exposure = cmd->cmd_data.start_shooting.exposure;
+  g_state.frames = cmd->cmd_data.start_shooting.frames;
   g_state.frames_taken = 0;
   g_state.shooting = true;
 
@@ -676,10 +665,34 @@ static void start_shooting_command(struct command_t *cmd) {
   post_command_async(TAKE_PICTURE, 0, NULL);
 }
 
-static void stop_shooting_command(struct command_t *cmd) {
+static void stop_shooting_command(const struct command_t *cmd) {
   abort_timer();
   g_state.shooting = false;
 }
+
+static void terminate_command(const struct command_t *cmd) {
+  g_running = false;
+}
+
+static const char *command_names[] = {
+    "NO_OP",          "INITIALIZE",    "DEINITIALIZE",
+    "CONNECT",        "DISCONNECT",    "TAKE_PICTURE",
+    "START_SHOOTING", "STOP_SHOOTING", "TERMINATE",
+};
+
+typedef void (*command_handler_t)(const struct command_t *);
+
+static const command_handler_t command_table[] = {
+    [NO_OP] = no_op_command,
+    [INITIALIZE] = initialize_command,
+    [DEINITIALIZE] = deinitialize_command,
+    [CONNECT] = connect_command,
+    [DISCONNECT] = disconnect_command,
+    [TAKE_PICTURE] = take_picture_command,
+    [START_SHOOTING] = start_shooting_command,
+    [STOP_SHOOTING] = stop_shooting_command,
+    [TERMINATE] = terminate_command,
+};
 
 static void shooting_state_machine() {
   while (g_running) {
@@ -694,44 +707,12 @@ static void shooting_state_machine() {
       continue;
     }
 
-    MG_DEBUG(("Command: %s on slot %d", command_names[cmd.type], slot));
+    const char *command_name = command_names[cmd.type];
+    command_handler_t handler = command_table[cmd.type];
 
-    switch (cmd.type) {
-    case NO_OP:
-      break;
+    MG_DEBUG(("Command: %s on slot %d", command_name, slot));
 
-    case INITIALIZE:
-      initialize_command(&cmd);
-      break;
-
-    case DEINITIALIZE:
-      deinitialize_command(&cmd);
-      break;
-
-    case CONNECT:
-      connect_command(&cmd);
-      break;
-
-    case DISCONNECT:
-      disconnect_command(&cmd);
-      break;
-
-    case TAKE_PICTURE:
-      take_picture_command(&cmd);
-      break;
-
-    case START_SHOOTING:
-      start_shooting_command(&cmd);
-      break;
-
-    case STOP_SHOOTING:
-      stop_shooting_command(&cmd);
-      break;
-
-    case TERMINATE:
-      g_running = false;
-      break;
-    }
+    handler(&cmd);
 
     notify_processed(slot);
   }
@@ -745,8 +726,8 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
   }
 
   if (ev == MG_EV_HTTP_MSG) {
-    struct mg_http_message *hm = (struct mg_http_message *)ev_data;
-    struct mg_str method = hm->method;
+    const struct mg_http_message *hm = (const struct mg_http_message *)ev_data;
+    const struct mg_str method = hm->method;
 
     bool is_get = mg_vcmp(&method, "GET") == 0;
     bool is_post = mg_vcmp(&method, "POST") == 0;
@@ -842,7 +823,7 @@ void sig_handler(int sig) {
   post_command_async(TERMINATE, 0, NULL);
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, const char *argv[]) {
   signal(SIGTERM, sig_handler);
   signal(SIGINT, sig_handler);
 
