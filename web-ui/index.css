@@ -1,0 +1,53 @@
+body {
+  font-family: Roboto, Helvetica, Arial, sans-serif;
+}
+
+fieldset {
+  border: 1px solid rgba(0, 0, 0, 0.38);
+  color: rgba(0, 0, 0, 0.38);
+  border-radius: 4px;
+}
+
+button {
+  padding: 6px 16px;
+}
+
+input[type='text'], input[type='number'], textarea {
+  font-size: 16px;
+}
+
+input {
+  border: 0px;
+  width: 100%;
+  background: none;
+}
+
+select {
+  border: 1px solid rgba(0, 0, 0, 0.38);
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  row-gap: 30px;
+}
+
+.content .camera {
+  display: flex;
+  flex-direction: row;
+  column-gap: 10px;
+  align-items: center;
+}
+
+.content .inputs {
+  display: flex;
+  flex-direction: column;
+  row-gap: 30px;
+}
+
+.content .actions {
+  display: flex;
+  flex-direction: row;
+  column-gap: 10px;
+  justify-content: center;
+}

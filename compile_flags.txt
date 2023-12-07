@@ -1,2 +1,3 @@
 -D__MACOS__
+-D__APPLE__
 -Icanon-sdk/EDSDK/Header

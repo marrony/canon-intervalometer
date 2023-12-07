@@ -1,16 +1,13 @@
 #include <EDSDK.h>
 #include <assert.h>
-#include <errno.h>
 #include <libgen.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdlib.h>
 
 #include "mongoose.h"
-
-#define NANOS (MICROS * 1000ll)
-#define MICROS (MILLIS * 1000ll)
-#define MILLIS (1000ll)
+#include "queue.h"
+#include "timer.h"
 
 #ifdef __MACOS__
 extern __uint64_t __thread_selfid(void);
@@ -28,10 +25,9 @@ static int64_t get_system_nanos() {
   return (int64_t)ts.tv_sec * NANOS + (int64_t)ts.tv_nsec;
 }
 
-static bool g_running = true;
-
 static struct {
   pthread_mutex_t mutex;
+  bool running;
   long delay;
   long exposure;
   long interval;
@@ -44,6 +40,7 @@ static struct {
   EdsCameraRef camera;
 } g_state = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .running = true,
     .delay = 1,
     .exposure = 5,
     .interval = 1,
@@ -54,6 +51,13 @@ static struct {
     .shooting = false,
     .description = {0},
     .camera = NULL,
+};
+
+static struct sync_queue_t g_queue = {
+    .queue = QUEUE_INITIALIZER,
+    .sync_mutex = PTHREAD_MUTEX_INITIALIZER,
+    .sync_wait = PTHREAD_COND_INITIALIZER,
+    .processed = 0,
 };
 
 static bool is_initialized() {
@@ -79,73 +83,6 @@ static bool is_shooting() {
 
 static pthread_t http_server;
 static pthread_t main_thread;
-
-enum command_type {
-  NO_OP,
-  INITIALIZE,
-  DEINITIALIZE,
-  CONNECT,
-  DISCONNECT,
-  TAKE_PICTURE,
-  START_SHOOTING,
-  STOP_SHOOTING,
-  TERMINATE,
-};
-
-struct start_shooting_cmd {
-  long delay;
-  long exposure;
-  long interval;
-  long frames;
-};
-
-struct command_t {
-  enum command_type type;
-  union {
-    struct start_shooting_cmd start_shooting;
-  } cmd_data;
-};
-
-#define DELAYS_SIZE 32
-
-static struct {
-  bool aborted;
-  pthread_mutex_t mutex;
-  pthread_cond_t cond;
-  int64_t delays[DELAYS_SIZE];
-  int delays_start;
-  int delays_length;
-} g_timer = {
-    .aborted = false,
-    .mutex = PTHREAD_MUTEX_INITIALIZER,
-    .cond = PTHREAD_COND_INITIALIZER,
-    .delays = {0},
-    .delays_start = 0,
-    .delays_length = 0,
-};
-
-static void add_delay(int64_t delay) {
-  g_timer.delays[(g_timer.delays_start + g_timer.delays_length) % DELAYS_SIZE] =
-      delay;
-
-  if (g_timer.delays_length < DELAYS_SIZE) {
-    g_timer.delays_length++;
-  } else {
-    g_timer.delays_start = (g_timer.delays_start + 1) % DELAYS_SIZE;
-  }
-}
-
-static int64_t get_delay_average() {
-  if (g_timer.delays_length == 0)
-    return 0;
-
-  int64_t sum = 0;
-
-  for (int i = 0; i < g_timer.delays_length; i++)
-    sum += g_timer.delays[(g_timer.delays_start + i) % DELAYS_SIZE];
-
-  return sum / g_timer.delays_length;
-}
 
 #if 0
 static int nssleep(int64_t timer_ns) {
@@ -347,170 +284,6 @@ static bool release_shutter(int64_t *ts) {
   return true;
 }
 
-static void adjust_timer_ns(struct timespec *ts, int64_t timer_ns) {
-  clock_gettime(CLOCK_REALTIME, ts);
-
-  ts->tv_sec += timer_ns / NANOS;
-  ts->tv_nsec += timer_ns % NANOS;
-
-  ts->tv_sec += ts->tv_nsec / NANOS;
-  ts->tv_nsec = ts->tv_nsec % NANOS;
-}
-
-static bool start_timer_ns(int64_t timer_ns) {
-  MG_DEBUG(("Timer %lld", timer_ns));
-
-  struct timespec ts = {0, 0};
-  adjust_timer_ns(&ts, timer_ns);
-
-  assert(pthread_mutex_lock(&g_timer.mutex) == 0);
-
-  {
-    g_timer.aborted = false;
-    int ret = pthread_cond_timedwait(&g_timer.cond, &g_timer.mutex, &ts);
-    assert(ret != EINVAL);
-    // 0 means cond was triggered, otherwise ETIMEDOUT is returned
-    g_timer.aborted = ret == 0;
-  }
-
-  bool aborted = g_timer.aborted;
-  assert(pthread_mutex_unlock(&g_timer.mutex) == 0);
-  return !aborted;
-}
-
-static void abort_timer() {
-  // at this point timer_mutex is unlock wating for the condition
-  assert(pthread_mutex_lock(&g_timer.mutex) == 0);
-  if (!g_timer.aborted)
-    pthread_cond_broadcast(&g_timer.cond);
-  g_timer.aborted = true;
-  assert(pthread_mutex_unlock(&g_timer.mutex) == 0);
-}
-
-#define BUFFER_SIZE 8
-
-struct thread_queue_t {
-  struct command_t buffer[BUFFER_SIZE];
-  int size;
-  int nextin;
-  int nextout;
-  pthread_mutex_t mutex;
-  pthread_cond_t produced;
-  pthread_cond_t consumed;
-};
-
-int enqueue_command(struct thread_queue_t *b, const struct command_t *cmd) {
-  assert(pthread_mutex_lock(&b->mutex) == 0);
-
-  while (b->size >= BUFFER_SIZE)
-    assert(pthread_cond_wait(&b->consumed, &b->mutex) == 0);
-
-  assert(b->size < BUFFER_SIZE);
-
-  int nextin = b->nextin++;
-  b->nextin %= BUFFER_SIZE;
-  b->size++;
-
-  b->buffer[nextin] = *cmd;
-
-  assert(pthread_cond_signal(&b->produced) == 0);
-  assert(pthread_mutex_unlock(&b->mutex) == 0);
-
-  return nextin;
-}
-
-int dequeue_command(struct thread_queue_t *b, struct command_t *cmd,
-                    int64_t timer_ns) {
-  assert(pthread_mutex_lock(&b->mutex) == 0);
-
-  struct timespec ts = {0, 0};
-  adjust_timer_ns(&ts, timer_ns);
-
-  while (b->size <= 0) {
-    int ret = pthread_cond_timedwait(&b->produced, &b->mutex, &ts);
-    if (ret == ETIMEDOUT) {
-      assert(pthread_mutex_unlock(&b->mutex) == 0);
-      return -1;
-    }
-  }
-
-  assert(b->size > 0);
-
-  int nextout = b->nextout++;
-  b->nextout %= BUFFER_SIZE;
-  b->size--;
-
-  *cmd = b->buffer[nextout];
-
-  assert(pthread_cond_signal(&b->consumed) == 0);
-  assert(pthread_mutex_unlock(&b->mutex) == 0);
-
-  return nextout;
-}
-
-struct sync_queue_t {
-  struct thread_queue_t queue;
-  pthread_mutex_t sync_mutex;
-  pthread_cond_t sync_wait;
-  int32_t processed;
-};
-
-static struct sync_queue_t g_queue = {
-    .queue =
-        {
-            .buffer = {0},
-            .size = 0,
-            .nextin = 0,
-            .nextout = 0,
-            .mutex = PTHREAD_MUTEX_INITIALIZER,
-            .produced = PTHREAD_COND_INITIALIZER,
-            .consumed = PTHREAD_COND_INITIALIZER,
-        },
-    .sync_mutex = PTHREAD_MUTEX_INITIALIZER,
-    .sync_wait = PTHREAD_COND_INITIALIZER,
-    .processed = 0,
-};
-
-static void notify_processed(int slot) {
-  assert(pthread_mutex_lock(&g_queue.sync_mutex) == 0);
-  g_queue.processed |= (1 << slot);
-  assert(pthread_cond_signal(&g_queue.sync_wait) == 0);
-  assert(pthread_mutex_unlock(&g_queue.sync_mutex) == 0);
-}
-
-static void post_command(enum command_type type, size_t cmd_size,
-                         const void *cmd_data, bool wait) {
-  assert(pthread_mutex_lock(&g_queue.sync_mutex) == 0);
-
-  struct command_t cmd = {
-      .type = type,
-  };
-
-  if (cmd_data != NULL)
-    memcpy(&cmd.cmd_data, cmd_data, cmd_size);
-
-  int slot = enqueue_command(&g_queue.queue, &cmd);
-  int mask = 1 << slot;
-
-  g_queue.processed &= ~mask;
-
-  while (wait && (g_queue.processed & mask) == 0) {
-    assert(pthread_cond_wait(&g_queue.sync_wait, &g_queue.sync_mutex) == 0);
-  }
-
-  assert(pthread_mutex_unlock(&g_queue.sync_mutex) == 0);
-}
-
-static void post_command_sync(enum command_type type, size_t cmd_size,
-                              const void *cmd_data) {
-  post_command(type, cmd_size, cmd_data, true);
-}
-
-static void post_command_async(enum command_type type, size_t cmd_size,
-                               const void *cmd_data) {
-  post_command(type, cmd_size, cmd_data, false);
-}
-
 static void no_op_command(const struct command_t *cmd) {}
 
 static void deinitialize_command(const struct command_t *cmd) {
@@ -634,7 +407,7 @@ static void take_picture_command(const struct command_t *cmd) {
 
   if (++g_state.frames_taken < g_state.frames) {
     start_timer_ns(g_state.interval * NANOS);
-    post_command_async(TAKE_PICTURE, 0, NULL);
+    async_queue_post(&g_queue, TAKE_PICTURE, 0, NULL, true);
   } else {
     g_state.shooting = false;
   }
@@ -651,7 +424,7 @@ static void start_shooting_command(const struct command_t *cmd) {
   if (g_state.delay > 0)
     start_timer_ns(g_state.delay * NANOS);
 
-  post_command_async(TAKE_PICTURE, 0, NULL);
+  async_queue_post(&g_queue, TAKE_PICTURE, 0, NULL, true);
 }
 
 static void stop_shooting_command(const struct command_t *cmd) {
@@ -660,7 +433,7 @@ static void stop_shooting_command(const struct command_t *cmd) {
 }
 
 static void terminate_command(const struct command_t *cmd) {
-  g_running = false;
+  g_state.running = false;
 }
 
 static const char *command_names[] = {
@@ -683,13 +456,13 @@ static const command_handler_t command_table[] = {
     [TERMINATE] = terminate_command,
 };
 
-static void shooting_state_machine() {
-  while (g_running) {
+static void command_processor() {
+  while (g_state.running) {
     struct command_t cmd = {
         .type = NO_OP,
     };
 
-    int slot = dequeue_command(&g_queue.queue, &cmd, 500 * MICROS);
+    int32_t slot = async_queue_dequeue(&g_queue, &cmd, 500 * MICROS);
 
     if (slot < 0) {
       EdsGetEvent();
@@ -703,26 +476,158 @@ static void shooting_state_machine() {
 
     handler(&cmd);
 
-    notify_processed(slot);
+    async_queue_unlock(&g_queue, slot);
   }
+}
+
+static size_t render_head(void (*out)(char, void *), void *ptr, va_list *ap) {
+  return mg_xprintf(out, ptr,
+                    "<head>"
+                    "  <meta name=\"viewport\" content=\"width=device-width, "
+                    "initial-scale=1.0\" />"
+                    "  <link rel=\"stylesheet\" href=\"index.css\">"
+                    "  <script src=\"htmx.min.js\"></script>"
+                    "  <script src=\"index.js\"></script>"
+                    "</head>");
+}
+
+static size_t render_camera_content(void (*out)(char, void *), void *ptr,
+                                    va_list *ap) {
+  return mg_xprintf(out, ptr,
+                    "<div class=\"content camera\">"
+                    "  <fieldset>"
+                    "    <legend>Camera</legend>"
+                    "    <input type=\"text\" disabled value=\"Canon\" />"
+                    "  </fieldset>"
+                    "  <button>Refresh</button>"
+                    "</div>");
+}
+
+static size_t render_delay(void (*out)(char, void *), void *ptr, va_list *ap) {
+  return mg_xprintf(out, ptr,
+                    "<input type=\"number\" name=\"delay\" value=\"%d\" "
+                    "  inputmode=\"numeric\" "
+                    "  hx-post=\"/delay\" hx-swap=\"outerHTML\" "
+                    "  hx-trigger=\"keyup changed delay:500ms\" />",
+                    g_state.delay);
+}
+
+static size_t render_inputs_content(void (*out)(char, void *), void *ptr,
+                                    va_list *ap) {
+  return mg_xprintf(out, ptr,
+                    "<div class=\"content inputs\">"
+                    "  <fieldset>"
+                    "    <legend>Delay (seconds)</legend>"
+                    "    %M"
+                    "  </fieldset>"
+                    "  <fieldset>"
+                    "    <legend>Exposure (seconds)</legend>"
+                    "    <input type=\"number\" />"
+                    "  </fieldset>"
+                    "  <fieldset>"
+                    "    <legend>Interval (seconds)</legend>"
+                    "    <input type=\"number\" />"
+                    "  </fieldset>"
+                    "  <fieldset>"
+                    "    <legend>Frames</legend>"
+                    "    <input type=\"number\" />"
+                    "  </fieldset>"
+                    "</div>",
+                    render_delay);
+}
+
+static size_t render_actions_content(void (*out)(char, void *), void *ptr,
+                                     va_list *ap) {
+  return mg_xprintf(out, ptr,
+                    "<div class=\"content actions\">"
+                    "  <button>Start</button>"
+                    "  <button>Stop</button>"
+                    "  <button>Take Picture</button>"
+                    "</div>");
+}
+
+static size_t render_content(void (*out)(char, void *), void *ptr,
+                             va_list *ap) {
+  return mg_xprintf(out, ptr,
+                    "<div class=\"content\">"
+                    "  %M"
+                    "  %M"
+                    "  %M"
+                    "</div>",
+                    render_camera_content, render_inputs_content,
+                    render_actions_content);
+}
+
+static size_t render_body(void (*out)(char, void *), void *ptr, va_list *ap) {
+  return mg_xprintf(out, ptr,
+                    "<body>"
+                    "  %M"
+                    "</body>",
+                    render_content);
+}
+
+static size_t render_html(void (*out)(char, void *), void *ptr, va_list *ap) {
+  return mg_xprintf(out, ptr,
+                    "<!doctype html>\r\n"
+                    "<html lang=\"en\">\r\n"
+                    "  %M\r\n"
+                    "  %M\r\n"
+                    "</html>",
+                    render_head, render_body);
+}
+
+static void render_index_html(struct mg_connection *c) {
+  mg_http_reply(c, 200,
+                "Content-Type: text/html; charset=utf-8\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "%M", render_html);
 }
 
 static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
                         void *fn_data) {
   (void)fn_data;
 
-  if (ev == MG_EV_POLL) {
-  }
-
   if (ev == MG_EV_HTTP_MSG) {
     const struct mg_http_message *hm = (const struct mg_http_message *)ev_data;
     const struct mg_str method = hm->method;
 
+    bool is_options = mg_vcmp(&method, "OPTIONS") == 0;
+
+    if (is_options) {
+      mg_http_reply(
+          c, 204,
+          "Access-Control-Allow-Origin: *\r\n"
+          "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
+          "Access-Control-Allow-Headers: *\r\n",
+          "");
+      return;
+    }
+
     bool is_get = mg_vcmp(&method, "GET") == 0;
     bool is_post = mg_vcmp(&method, "POST") == 0;
 
+    if (mg_http_match_uri(hm, "/delay")) {
+      struct mg_str body = hm->body;
+
+      MG_DEBUG(("Delay = %d %.*s", body.len, body.len, body.ptr));
+
+      char buf[32];
+      if (mg_http_get_var(&body, "delay", buf, sizeof(buf)) > 0) {
+        long delay = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
+
+        g_state.delay = delay;
+
+        mg_http_reply(c, 200,
+                      "Content-Type: text/html; charset=utf-8\r\n"
+                      "Access-Control-Allow-Origin: *\r\n",
+                      "%M", render_delay);
+      } else {
+        serialize_failure(c, "Some unkown error");
+      }
+    }
+
     if (is_get && mg_http_match_uri(hm, "/api/camera")) {
-      post_command_sync(INITIALIZE, 0, NULL);
+      async_queue_post(&g_queue, INITIALIZE, 0, NULL, false);
 
       if (is_initialized()) {
         serialize_camera(c);
@@ -730,7 +635,7 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
         serialize_failure(c, "No cameras detected");
       }
     } else if (is_post && mg_http_match_uri(hm, "/api/camera/connect")) {
-      post_command_sync(CONNECT, 0, NULL);
+      async_queue_post(&g_queue, CONNECT, 0, NULL, false);
 
       if (is_connected()) {
         serialize_state(c);
@@ -738,7 +643,7 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
         serialize_failure(c, "Error connecting to the camera");
       }
     } else if (is_post && mg_http_match_uri(hm, "/api/camera/disconnect")) {
-      post_command_sync(DISCONNECT, 0, NULL);
+      async_queue_post(&g_queue, DISCONNECT, 0, NULL, false);
 
       if (!is_connected()) {
         serialize_state(c);
@@ -764,7 +669,7 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
           .frames = frames,
       };
 
-      post_command_sync(START_SHOOTING, sizeof(cmd), &cmd);
+      async_queue_post(&g_queue, START_SHOOTING, sizeof(cmd), &cmd, false);
 
       if (is_shooting()) {
         serialize_state(c);
@@ -772,7 +677,7 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
         serialize_failure(c, "Cannot start shooting");
       }
     } else if (is_post && mg_http_match_uri(hm, "/api/camera/stop-shoot")) {
-      post_command_sync(STOP_SHOOTING, 0, NULL);
+      async_queue_post(&g_queue, STOP_SHOOTING, 0, NULL, false);
 
       if (!is_shooting()) {
         serialize_state(c);
@@ -780,14 +685,20 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
         serialize_failure(c, "Failed to stop shooting");
       }
     } else if (is_post && mg_http_match_uri(hm, "/api/camera/take-picture")) {
-      post_command_sync(TAKE_PICTURE, 0, NULL);
+      async_queue_post(&g_queue, TAKE_PICTURE, 0, NULL, false);
 
       serialize_success(c);
     } else if (is_get && mg_http_match_uri(hm, "/api/camera/state")) {
       serialize_state(c);
     } else if (is_get) {
-      struct mg_http_serve_opts opts = {.root_dir = s_root_dir};
-      mg_http_serve_dir(c, ev_data, &opts);
+      MG_DEBUG(("GET %.*s", hm->uri.len, hm->uri.ptr));
+
+      if (mg_http_match_uri(hm, "/")) {
+        render_index_html(c);
+      } else {
+        struct mg_http_serve_opts opts = {.root_dir = s_root_dir};
+        mg_http_serve_dir(c, ev_data, &opts);
+      }
     } else {
       not_found(c);
     }
@@ -799,7 +710,7 @@ static void *http_server_thread(void *data) {
   mg_log_set(MG_LL_DEBUG);
   mg_mgr_init(&mgr);
   mg_http_listen(&mgr, s_http_addr, evt_handler, NULL);
-  while (g_running) {
+  while (g_state.running) {
     mg_mgr_poll(&mgr, 1000);
   }
   mg_mgr_free(&mgr);
@@ -808,8 +719,8 @@ static void *http_server_thread(void *data) {
 }
 
 static void sig_handler(int sig) {
-  post_command_async(DISCONNECT, 0, NULL);
-  post_command_async(TERMINATE, 0, NULL);
+  async_queue_post(&g_queue, DISCONNECT, 0, NULL, true);
+  async_queue_post(&g_queue, TERMINATE, 0, NULL, true);
 }
 
 int main(int argc, const char *argv[]) {
@@ -829,7 +740,7 @@ int main(int argc, const char *argv[]) {
   pthread_create(&http_server, NULL, http_server_thread, NULL);
 
   // EDSDK demands its api call to be in the main thread on MacOS
-  shooting_state_machine();
+  command_processor();
 
   pthread_join(http_server, NULL);
 

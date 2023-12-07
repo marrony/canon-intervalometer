@@ -6,7 +6,7 @@ DEPS :=
 
 ifeq ($(UNAME_S),Darwin)
 LDFLAGS += -Fcanon-sdk/EDSDK/Framework -framework EDSDK -rpath @executable_path/Framework
-CFLAGS += -D__MACOS__
+CFLAGS += -D__MACOS__ -D__APPLE__
 DEPS += bin/Framework/EDSDK.framework
 endif
 
@@ -23,37 +23,24 @@ CFLAGS += -DTARGET_OS_LINUX
 DEPS += bin/libEDSDK.so
 endif
 
-SRCS := src/main.c src/mongoose.c
+HDRS := src/queue.h src/timer.h src/mongoose.h
+SRCS := src/main.c src/queue.c src/timer.c src/mongoose.c
 OBJS := $(patsubst src/%.c, bin/%.o, $(SRCS))
 
 all: bin bin/web_root bin/main
 
-.PHONY: build_dist
-
-build_dist:
-	mkdir -p web-ui/dist
-	rm -rf web-ui/dist/*
-	cd web-ui && VITE_BACKEND_URL= VITE_POOLING_TIME=2000 npm run build
-
 bin/main: $(OBJS)
 	gcc $(LDFLAGS) -o $@ $^
 
-bin/%.o: src/%.c Makefile
+bin/%.o: src/%.c $(HDRS) Makefile
 	gcc -Wall $(CFLAGS) -o $@ -c $<
 
-web_root_deps :=
-
-# it's very time consuming build web-ui on raspberry pi
-ifeq ($(UNAME_S),Darwin)
-web_root_deps += build_dist
-endif
-
-web_root_deps += $(wildcard web-ui/dist/*)
+web_root_deps := web-ui/index.css web-ui/index.js web-ui/htmx.min.js
 
 bin/web_root: $(web_root_deps)
 	mkdir -p bin/web_root
 	rm -rf bin/web_root/*
-	cp -r web-ui/dist/* bin/web_root/
+	cp -r web-ui/* bin/web_root/
 
 bin/Framework/EDSDK.framework:
 	mkdir -p bin/Framework/
@@ -71,3 +58,4 @@ sync:
 
 cppcheck:
 	cppcheck --force --enable=all --suppress=missingIncludeSystem --std=c99 $(CFLAGS) src/main.c
+
