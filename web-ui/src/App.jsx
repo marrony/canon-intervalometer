@@ -1,18 +1,12 @@
 import { useRef, useState, useEffect } from 'react'
 import {
   Button,
-  ButtonGroup,
   TextField,
-  InputLabel,
   IconButton,
-  Select,
-  MenuItem,
 } from '@mui/material';
 import './styles/App.css'
 
 import RefreshIcon from '@mui/icons-material/Refresh';
-import ArrowDropUpIcon from '@mui/icons-material/ArrowDropUp';
-import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 
 // self/delay: wait time between push button and start
 // long/exposure: how long exposure
@@ -36,7 +30,11 @@ const defaultState = {
   hold: false,
   connected: false,
   shooting: false,
-  camera: 0,
+};
+
+const defaultCamera = {
+  available: false,
+  description: 'No camera detected'
 };
 
 // workaround to avoid https://react.dev/blog/2022/03/29/react-v18#new-strict-mode-behaviors
@@ -52,20 +50,20 @@ function useOnMountUnsafe(effect) {
 }
 
 function App() {
-  const [ state, setState ] = useState(defaultState);
-  const [ cameraList, setCameraList ] = useState([]);
+  const [state, setState] = useState(defaultState);
+  const [camera, setCamera] = useState(defaultCamera);
 
   useOnMountUnsafe(() => refreshCameras());
 
   const onChangeState = (value, field) => {
     setState(prev => {
-      return {...prev, [field]: value};
+      return { ...prev, [field]: value };
     });
   };
 
   const refreshCameras = async () => {
     const response = await fetch(
-      `${backendUrl}/api/cameras`,
+      `${backendUrl}/api/camera`,
       { method: "GET" }
     );
 
@@ -73,14 +71,13 @@ function App() {
     console.log(json);
 
     if (json.status === 'success') {
-      setCameraList(json.cameras);
+      setCamera({
+        available: true,
+        description: json.camera.description
+      });
       setState(json.state);
-
-      if (json.cameras.length > 0) {
-        onChangeState(json.cameras[0].id, 'camera');
-      }
     } else {
-      setCameraList([]);
+      setCamera(defaultCamera);
       setState(defaultState);
     }
   };
@@ -88,12 +85,7 @@ function App() {
   const connectCamera = async () => {
     const response = await fetch(
       `${backendUrl}/api/camera/connect`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          camera: state.camera
-        })
-      }
+      { method: "POST" }
     );
 
     const json = await response.json();
@@ -115,12 +107,7 @@ function App() {
 
     const response = await fetch(
       `${backendUrl}/api/camera/disconnect`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          camera: state.camera
-        })
-      }
+      { method: "POST" }
     );
 
     const json = await response.json();
@@ -138,7 +125,6 @@ function App() {
       {
         method: "POST",
         body: JSON.stringify({
-          camera: state.camera,
           delay: state.delay,
           exposure: state.exposure,
           interval: state.interval,
@@ -158,12 +144,7 @@ function App() {
   const getState = async () => {
     const response = await fetch(
       `${backendUrl}/api/camera/state`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          camera: state.camera
-        })
-      }
+      { method: "POST" }
     );
 
     return await response.json();
@@ -194,12 +175,7 @@ function App() {
 
     const response = await fetch(
       `${backendUrl}/api/camera/stop-shoot`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          camera: state.camera
-        })
-      }
+      { method: "POST" }
     );
 
     const json = await response.json();
@@ -209,47 +185,28 @@ function App() {
       onChangeState(false, 'shooting');
   };
 
-  const takePicture = async () => {
+  const takePicture = async (event) => {
     event.preventDefault();
 
     const response = await fetch(
       `${backendUrl}/api/camera/take-picture`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          camera: state.camera
-        })
-      }
+      { method: "POST" }
     );
 
     const json = await response.json();
     console.log(json);
   };
 
-  const camerasOptions = cameraList.map(camera => {
-    return (
-      <MenuItem key={`camera-${camera.id}`} value={camera.id}>
-        {camera.description}
-      </MenuItem>
-    );
-  });
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', rowGap: '30px' }}>
       <div>
-        <InputLabel id="camera-select-label">Camera</InputLabel>
-        <Select
-          labelId="camera-select-label"
-          value={state.camera !== 0 ? state.camera : ''}
+        <TextField
           label="Camera"
-          disabled={state.connected}
-          onChange={ (e) => {
-            console.log(e)
-            onChangeState(e.target.value, 'camera')
-          }}
-        >
-          {camerasOptions}
-        </Select>
+          variant="outlined"
+          InputLabelProps={{ shrink: true }}
+          disabled={true}
+          value={camera.description}
+        />
 
         <IconButton
           disabled={state.connected}
@@ -258,7 +215,7 @@ function App() {
           <RefreshIcon />
         </IconButton>
 
-        {state.camera !== 0 && !state.connected && (
+        {camera.available && !state.connected && (
           <Button
             onClick={connectCamera}
           >
@@ -266,13 +223,13 @@ function App() {
           </Button>
         )}
 
-        {state.camera !== 0 && state.connected && (
+        {camera.available && state.connected && (
           <Button
             disabled={state.shooting}
             onClick={disconnectCamera}
           >
             Disconnect
-         </Button>
+          </Button>
         )}
       </div>
 
@@ -285,7 +242,7 @@ function App() {
           inputProps={{ inputMode: 'numeric' }}
           disabled={!state.connected || state.shooting}
           value={state.delay}
-          onChange={ (e) => onChangeState(parseInt(e.target.value), 'delay') }
+          onChange={(e) => onChangeState(parseInt(e.target.value), 'delay')}
         />
 
         <TextField
@@ -296,7 +253,7 @@ function App() {
           inputProps={{ inputMode: 'numeric' }}
           disabled={!state.connected || state.shooting}
           value={state.exposure}
-          onChange={ (e) => onChangeState(parseInt(e.target.value), 'exposure') }
+          onChange={(e) => onChangeState(parseInt(e.target.value), 'exposure')}
         />
 
         <TextField
@@ -307,7 +264,7 @@ function App() {
           inputProps={{ inputMode: 'numeric' }}
           disabled={!state.connected || state.shooting}
           value={state.interval}
-          onChange={ (e) => onChangeState(parseInt(e.target.value), 'interval') }
+          onChange={(e) => onChangeState(parseInt(e.target.value), 'interval')}
         />
 
         <TextField
@@ -318,7 +275,7 @@ function App() {
           inputProps={{ inputMode: 'numeric' }}
           disabled={!state.connected || state.shooting}
           value={state.frames}
-          onChange={ (e) => onChangeState(parseInt(e.target.value), 'frames') }
+          onChange={(e) => onChangeState(parseInt(e.target.value), 'frames')}
         />
       </div>
 

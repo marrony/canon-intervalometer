@@ -1,4 +1,6 @@
 #include <EDSDK.h>
+#include <assert.h>
+#include <errno.h>
 #include <libgen.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -362,21 +364,15 @@ static bool start_timer_ns(int64_t timer_ns) {
   adjust_timer_ns(&ts, timer_ns);
 
   assert(pthread_mutex_lock(&g_timer.mutex) == 0);
-  g_timer.aborted = false;
-  bool running = true;
-  while (running && !g_timer.aborted) {
-    switch (pthread_cond_timedwait(&g_timer.cond, &g_timer.mutex, &ts)) {
-    case ETIMEDOUT:
-      running = false;
-      break;
 
-    case EINVAL:
-      MG_DEBUG(("EINVAL"));
-      running = false;
-      g_timer.aborted = true;
-      break;
-    }
+  {
+    g_timer.aborted = false;
+    int ret = pthread_cond_timedwait(&g_timer.cond, &g_timer.mutex, &ts);
+    assert(ret != EINVAL);
+    // 0 means cond was triggered, otherwise ETIMEDOUT is returned
+    g_timer.aborted = ret == 0;
   }
+
   bool aborted = g_timer.aborted;
   assert(pthread_mutex_unlock(&g_timer.mutex) == 0);
   return !aborted;
@@ -423,13 +419,6 @@ int enqueue_command(struct thread_queue_t *b, const struct command_t *cmd) {
   return nextin;
 }
 
-/**
- \brief Enqueue command
- \param[b] test
- \param[cmd] blah
- \param[timer_ns] what?
- \returns something
- */
 int dequeue_command(struct thread_queue_t *b, struct command_t *cmd,
                     int64_t timer_ns) {
   assert(pthread_mutex_lock(&b->mutex) == 0);
@@ -818,7 +807,7 @@ static void *http_server_thread(void *data) {
   return NULL;
 }
 
-void sig_handler(int sig) {
+static void sig_handler(int sig) {
   post_command_async(DISCONNECT, 0, NULL);
   post_command_async(TERMINATE, 0, NULL);
 }
