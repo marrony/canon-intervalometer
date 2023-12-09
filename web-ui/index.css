@@ -1,3 +1,11 @@
+/* .class0.class1: both classes */
+/* <div class="class1 class2"></div> */
+
+/* .class0 .class1: hierarchy */
+/* <div class="class0"> */
+/*   <div class="class1"></div> */
+/* </div> */
+
 body {
   font-family: Roboto, Helvetica, Arial, sans-serif;
 }
@@ -5,25 +13,28 @@ body {
 fieldset {
   border: 1px solid rgba(0, 0, 0, 0.38);
   color: rgba(0, 0, 0, 0.38);
-  border-radius: 4px;
+  border-radius: 8px;
+  margin: 0px;
+  padding: 5px;
 }
 
 button {
+  border: 1px solid rgba(0, 0, 0, 0.38);
   padding: 6px 16px;
-}
-
-input[type='text'], input[type='number'], textarea {
-  font-size: 16px;
+  border-radius: 8px;
 }
 
 input {
+  font-size: 25px;
   border: 0px;
   width: 100%;
-  background: none;
 }
 
 select {
-  border: 1px solid rgba(0, 0, 0, 0.38);
+  font-size: 25px;
+  border: 0px;
+  appearance: none;
+  background: none;
 }
 
 .content {
@@ -45,9 +56,45 @@ select {
   row-gap: 30px;
 }
 
+.content .inputs .time {
+  font-size: 25px;
+  display: flex;
+  flex-direction: row;
+  column-gap: 2px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.content .inputs .frames input {
+  text-align: end;
+  padding-right: 15px;
+}
+
+.content .inputs .frames {
+  display: flex;
+  flex-direction: row;
+  column-gap: 2px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .content .actions {
   display: flex;
   flex-direction: row;
   column-gap: 10px;
   justify-content: center;
+}
+
+/* disable arrow spinners */
+/* Chrome, Safari, Edge, Opera */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Firefox */
+input[type=number] {
+  -moz-appearance: textfield;
+  appearance: none;
 }

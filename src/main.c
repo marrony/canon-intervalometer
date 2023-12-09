@@ -480,7 +480,7 @@ static void command_processor() {
   }
 }
 
-static size_t render_head(void (*out)(char, void *), void *ptr, va_list *ap) {
+static size_t render_head(mg_pfn_t out, void *ptr, va_list *ap) {
   return mg_xprintf(out, ptr,
                     "<head>"
                     "  <meta name=\"viewport\" content=\"width=device-width, "
@@ -491,53 +491,103 @@ static size_t render_head(void (*out)(char, void *), void *ptr, va_list *ap) {
                     "</head>");
 }
 
-static size_t render_camera_content(void (*out)(char, void *), void *ptr,
-                                    va_list *ap) {
-  return mg_xprintf(out, ptr,
-                    "<div class=\"content camera\">"
-                    "  <fieldset>"
-                    "    <legend>Camera</legend>"
-                    "    <input type=\"text\" disabled value=\"Canon\" />"
-                    "  </fieldset>"
-                    "  <button>Refresh</button>"
-                    "</div>");
+static size_t render_camera_content(mg_pfn_t out, void *ptr, va_list *ap) {
+  return mg_xprintf(
+      out, ptr,
+      "<div id=\"camera-content\" class=\"content camera\">"
+      "  <fieldset>"
+      "    <legend>Camera</legend>"
+      "    <input name=\"camera\" type=\"text\" disabled value=%m />"
+      "  </fieldset>"
+      "  <button hx-get=\"/api/camera\" hx-target=\"#camera-content\" "
+      "    hx-swap=\"outerHTML\">Refresh</button>"
+      "</div>",
+      MG_ESC(g_state.description));
 }
 
-static size_t render_delay(void (*out)(char, void *), void *ptr, va_list *ap) {
-  return mg_xprintf(out, ptr,
-                    "<input type=\"number\" name=\"delay\" value=\"%d\" "
-                    "  inputmode=\"numeric\" "
-                    "  hx-post=\"/delay\" hx-swap=\"outerHTML\" "
-                    "  hx-trigger=\"keyup changed delay:500ms\" />",
-                    g_state.delay);
+static size_t render_select_options(mg_pfn_t out, void *ptr, va_list *ap) {
+  const char *id = va_arg(*ap, const char *);
+  const char *sub = va_arg(*ap, const char *);
+  long value = va_arg(*ap, long);
+
+  size_t size = 0;
+
+  size += mg_xprintf(out, ptr,
+                     "<select name=\"%s-%s\" class=\"%s\" "
+                     "  hx-post=\"/state/%s\" hx-swap=\"outerHTML\">",
+                     id, sub, sub, id);
+
+  for (int i = 0; i < 60; i++) {
+    size += mg_xprintf(out, ptr, "<option value=\"%02d\" %s>%02d</option>", i,
+                       i == value ? "selected" : "", i);
+  }
+
+  size += mg_xprintf(out, ptr, "</select>");
+
+  return size;
 }
 
-static size_t render_inputs_content(void (*out)(char, void *), void *ptr,
-                                    va_list *ap) {
+static size_t render_minutes(mg_pfn_t out, void *ptr, va_list *ap) {
+  const char *id = va_arg(*ap, const char *);
+  long value_seconds = va_arg(*ap, long);
+
+  return mg_xprintf(out, ptr, "%M", render_select_options, id, "minutes",
+                    value_seconds / 60);
+}
+
+static size_t render_seconds(mg_pfn_t out, void *ptr, va_list *ap) {
+  const char *id = va_arg(*ap, const char *);
+  long value_seconds = va_arg(*ap, long);
+
+  return mg_xprintf(out, ptr, "%M", render_select_options, id, "seconds",
+                    value_seconds % 60);
+}
+
+static size_t render_time(mg_pfn_t out, void *ptr, va_list *ap) {
+  const char *id = va_arg(*ap, const char *);
+  long value_seconds = va_arg(*ap, long);
+  long minutes = value_seconds / 60;
+  long seconds = value_seconds % 60;
+
+  return mg_xprintf(out, ptr, "<div class=\"time %s\">%M : %M</div>", id,
+                    render_select_options, id, "minutes", minutes,
+                    render_select_options, id, "seconds", seconds);
+}
+
+static size_t render_frames(mg_pfn_t out, void *ptr, va_list *ap) {
+  return mg_xprintf(out, ptr,
+                    "<input type=\"number\" name=\"frames\" value=\"%d\" "
+                    "  inputmode=\"numeric\" hx-post=\"/state/frames\" "
+                    "  hx-swap=\"outerHTML\" />",
+                    g_state.frames);
+}
+
+static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
   return mg_xprintf(out, ptr,
                     "<div class=\"content inputs\">"
                     "  <fieldset>"
-                    "    <legend>Delay (seconds)</legend>"
-                    "    %M"
+                    "    <legend>Delay</legend>"
+                    "    <div>%M</div>"
                     "  </fieldset>"
                     "  <fieldset>"
-                    "    <legend>Exposure (seconds)</legend>"
-                    "    <input type=\"number\" />"
+                    "    <legend>Exposure</legend>"
+                    "    <div class=\"exposure\">%M</div>"
                     "  </fieldset>"
                     "  <fieldset>"
-                    "    <legend>Interval (seconds)</legend>"
-                    "    <input type=\"number\" />"
+                    "    <legend>Interval</legend>"
+                    "    <div class=\"interval\">%M</div>"
                     "  </fieldset>"
                     "  <fieldset>"
                     "    <legend>Frames</legend>"
-                    "    <input type=\"number\" />"
+                    "    <div class=\"frames\">%M</div>"
                     "  </fieldset>"
                     "</div>",
-                    render_delay);
+                    render_time, "delay", g_state.delay, render_time,
+                    "exposure", g_state.exposure, render_time, "interval",
+                    g_state.interval, render_frames);
 }
 
-static size_t render_actions_content(void (*out)(char, void *), void *ptr,
-                                     va_list *ap) {
+static size_t render_actions_content(mg_pfn_t out, void *ptr, va_list *ap) {
   return mg_xprintf(out, ptr,
                     "<div class=\"content actions\">"
                     "  <button>Start</button>"
@@ -546,33 +596,18 @@ static size_t render_actions_content(void (*out)(char, void *), void *ptr,
                     "</div>");
 }
 
-static size_t render_content(void (*out)(char, void *), void *ptr,
-                             va_list *ap) {
-  return mg_xprintf(out, ptr,
-                    "<div class=\"content\">"
-                    "  %M"
-                    "  %M"
-                    "  %M"
-                    "</div>",
+static size_t render_content(mg_pfn_t out, void *ptr, va_list *ap) {
+  return mg_xprintf(out, ptr, "<div class=\"content\">%M%M%M</div>",
                     render_camera_content, render_inputs_content,
                     render_actions_content);
 }
 
-static size_t render_body(void (*out)(char, void *), void *ptr, va_list *ap) {
-  return mg_xprintf(out, ptr,
-                    "<body>"
-                    "  %M"
-                    "</body>",
-                    render_content);
+static size_t render_body(mg_pfn_t out, void *ptr, va_list *ap) {
+  return mg_xprintf(out, ptr, "<body>%M</body>", render_content);
 }
 
-static size_t render_html(void (*out)(char, void *), void *ptr, va_list *ap) {
-  return mg_xprintf(out, ptr,
-                    "<!doctype html>\r\n"
-                    "<html lang=\"en\">\r\n"
-                    "  %M\r\n"
-                    "  %M\r\n"
-                    "</html>",
+static size_t render_html(mg_pfn_t out, void *ptr, va_list *ap) {
+  return mg_xprintf(out, ptr, "<!doctype html><html lang=\"en\">%M%M</html>",
                     render_head, render_body);
 }
 
@@ -583,6 +618,62 @@ static void render_index_html(struct mg_connection *c) {
                 "%M", render_html);
 }
 
+static void handle_time(struct mg_connection *c,
+                        const struct mg_http_message *hm, const char *id,
+                        const char *minutes_var, const char *seconds_var,
+                        long *out_value) {
+  struct mg_str body = hm->body;
+
+  MG_DEBUG(("Variable = %d %.*s", body.len, body.len, body.ptr));
+
+  char buf[32];
+
+  if (mg_http_get_var(&body, seconds_var, buf, sizeof(buf)) > 0) {
+    long value = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
+
+    long minutes = *out_value / 60;
+
+    *out_value = minutes * 60 + value;
+
+    mg_http_reply(c, 200,
+                  "Content-Type: text/html; charset=utf-8\r\n"
+                  "Access-Control-Allow-Origin: *\r\n",
+                  "%M", render_seconds, id, *out_value);
+  } else if (mg_http_get_var(&body, minutes_var, buf, sizeof(buf)) > 0) {
+    long value = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
+
+    long seconds = *out_value % 60;
+
+    *out_value = value * 60 + seconds;
+
+    mg_http_reply(c, 200,
+                  "Content-Type: text/html; charset=utf-8\r\n"
+                  "Access-Control-Allow-Origin: *\r\n",
+                  "%M", render_minutes, id, *out_value);
+  } else {
+    serialize_failure(c, "Some unknown error");
+  }
+}
+
+static void handle_frames(struct mg_connection *c,
+                          const struct mg_http_message *hm) {
+  char buf[32];
+
+  if (mg_http_get_var(&hm->body, "frames", buf, sizeof(buf)) > 0) {
+    g_state.frames = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
+
+    if (g_state.frames < 0)
+      g_state.frames = 0;
+
+    mg_http_reply(c, 200,
+                  "Content-Type: text/html; charset=utf-8\r\n"
+                  "Access-Control-Allow-Origin: *\r\n",
+                  "%M", render_frames);
+  } else {
+    serialize_failure(c, "Some unknown error");
+  }
+}
+
 static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
                         void *fn_data) {
   (void)fn_data;
@@ -591,49 +682,35 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
     const struct mg_http_message *hm = (const struct mg_http_message *)ev_data;
     const struct mg_str method = hm->method;
 
-    bool is_options = mg_vcmp(&method, "OPTIONS") == 0;
-
-    if (is_options) {
-      mg_http_reply(
-          c, 204,
-          "Access-Control-Allow-Origin: *\r\n"
-          "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
-          "Access-Control-Allow-Headers: *\r\n",
-          "");
-      return;
-    }
-
     bool is_get = mg_vcmp(&method, "GET") == 0;
     bool is_post = mg_vcmp(&method, "POST") == 0;
 
-    if (mg_http_match_uri(hm, "/delay")) {
-      struct mg_str body = hm->body;
-
-      MG_DEBUG(("Delay = %d %.*s", body.len, body.len, body.ptr));
-
-      char buf[32];
-      if (mg_http_get_var(&body, "delay", buf, sizeof(buf)) > 0) {
-        long delay = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
-
-        g_state.delay = delay;
-
-        mg_http_reply(c, 200,
-                      "Content-Type: text/html; charset=utf-8\r\n"
-                      "Access-Control-Allow-Origin: *\r\n",
-                      "%M", render_delay);
-      } else {
-        serialize_failure(c, "Some unkown error");
-      }
+    if (is_post && mg_http_match_uri(hm, "/state/delay")) {
+      return handle_time(c, hm, "delay", "delay-minutes", "delay-seconds",
+                         &g_state.delay);
+    } else if (is_post && mg_http_match_uri(hm, "/state/exposure")) {
+      return handle_time(c, hm, "exposure", "exposure-minutes",
+                         "exposure-seconds", &g_state.exposure);
+    } else if (is_post && mg_http_match_uri(hm, "/state/interval")) {
+      return handle_time(c, hm, "interval", "interval-minutes",
+                         "interval-seconds", &g_state.interval);
+    } else if (is_post && mg_http_match_uri(hm, "/state/frames")) {
+      return handle_frames(c, hm);
     }
 
     if (is_get && mg_http_match_uri(hm, "/api/camera")) {
-      async_queue_post(&g_queue, INITIALIZE, 0, NULL, false);
-
-      if (is_initialized()) {
-        serialize_camera(c);
-      } else {
-        serialize_failure(c, "No cameras detected");
-      }
+      strcpy(g_state.description, "Canon R50");
+      mg_http_reply(c, 200,
+                    "Content-Type: text/html; charset=utf-8\r\n"
+                    "Access-Control-Allow-Origin: *\r\n",
+                    "%M", render_camera_content);
+      // async_queue_post(&g_queue, INITIALIZE, 0, NULL, false);
+      //
+      // if (is_initialized()) {
+      //   serialize_camera(c);
+      // } else {
+      //   serialize_failure(c, "No cameras detected");
+      // }
     } else if (is_post && mg_http_match_uri(hm, "/api/camera/connect")) {
       async_queue_post(&g_queue, CONNECT, 0, NULL, false);
 
