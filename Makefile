@@ -29,7 +29,7 @@ OBJS := $(patsubst src/%.c, bin/%.o, $(SRCS))
 
 .PHONY: all
 
-all: bin bin/web_root bin/main $(DEPS)
+all: bin bin/web_root/assets bin/main $(DEPS)
 
 bin/main: $(OBJS)
 	gcc -o $@ $^ $(LDFLAGS)
@@ -39,10 +39,10 @@ bin/%.o: src/%.c $(HDRS) Makefile
 
 web_root_deps := web-ui/index.css web-ui/index.js web-ui/htmx.min.js
 
-bin/web_root: $(web_root_deps)
-	mkdir -p bin/web_root
-	rm -rf bin/web_root/*
-	cp -r web-ui/* bin/web_root/
+bin/web_root/assets: $(web_root_deps)
+	mkdir -p bin/web_root/assets
+	rm -rf bin/web_root/assets/*
+	cp -r web-ui/* bin/web_root/assets/
 
 bin/Framework/EDSDK.framework:
 	mkdir -p bin/Framework/
