@@ -38,12 +38,12 @@ static size_t render_camera_content(mg_pfn_t out, void *ptr, va_list *ap) {
       size +=
           mg_xprintf(out, ptr,
                      "  <button hx-post=\"/api/camera/disconnect\" "
-                     "hx-target=\"#camera-content\" "
+                     "hx-target=\"#content\" "
                      "    hx-swap=\"outerHTML swap:1s\">Disconnect</button>");
     } else {
       size += mg_xprintf(out, ptr,
                          "  <button hx-post=\"/api/camera/connect\" "
-                         "hx-target=\"#camera-content\" "
+                         "hx-target=\"#content\" "
                          "    hx-swap=\"outerHTML swap:1s\">Connect</button>");
     }
   } else {
@@ -64,84 +64,33 @@ static void render_camera_response(struct mg_connection *c) {
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
-static size_t render_select_options(mg_pfn_t out, void *ptr, va_list *ap) {
+static size_t render_input(mg_pfn_t out, void *ptr, va_list *ap) {
   const char *id = va_arg(*ap, const char *);
-  const char *sub = va_arg(*ap, const char *);
   long value = va_arg(*ap, long);
+  int enabled = va_arg(*ap, int);
 
-  size_t size = 0;
-
-  size +=
-      mg_xprintf(out, ptr,
-                 "<select name=\"%s-%s\" class=\"%s\" "
-                 "  hx-post=\"/api/state/%s\" hx-swap=\"outerHTML swap:1s\">",
-                 id, sub, sub, id);
-
-  for (int i = 0; i < 60; i++) {
-    size += mg_xprintf(out, ptr, "<option value=\"%02d\" %s>%02d</option>", i,
-                       i == value ? "selected" : "", i);
-  }
-
-  size += mg_xprintf(out, ptr, "</select>");
-
-  return size;
-}
-
-static size_t render_minutes(mg_pfn_t out, void *ptr, va_list *ap) {
-  const char *id = va_arg(*ap, const char *);
-  long value_seconds = va_arg(*ap, long);
-
-  return mg_xprintf(out, ptr, "%M", render_select_options, id, "minutes",
-                    value_seconds / 60);
-}
-
-static size_t render_seconds(mg_pfn_t out, void *ptr, va_list *ap) {
-  const char *id = va_arg(*ap, const char *);
-  long value_seconds = va_arg(*ap, long);
-
-  return mg_xprintf(out, ptr, "%M", render_select_options, id, "seconds",
-                    value_seconds % 60);
-}
-
-static size_t render_time(mg_pfn_t out, void *ptr, va_list *ap) {
-  const char *id = va_arg(*ap, const char *);
-  long value_seconds = va_arg(*ap, long);
-  long minutes = value_seconds / 60;
-  long seconds = value_seconds % 60;
-
-  if (g_state.shooting) {
-    return mg_xprintf(
-        out, ptr,
-        "<div class=\"time %s\"><input value=\"%02d : %02d\" disabled /></div>",
-        id, minutes, seconds);
-  }
-
-  return mg_xprintf(out, ptr, "<div class=\"time %s\">%M : %M</div>", id,
-                    render_select_options, id, "minutes", minutes,
-                    render_select_options, id, "seconds", seconds);
-}
-
-static size_t render_frames(mg_pfn_t out, void *ptr, va_list *ap) {
   return mg_xprintf(out, ptr,
-                    "<input type=\"number\" name=\"frames\" value=\"%d\" "
-                    "  inputmode=\"numeric\" hx-post=\"/api/state/frames\" "
+                    "<input type=\"number\" name=\"%s\" value=\"%d\" "
+                    "  inputmode=\"numeric\" hx-post=\"/api/state/%s\" "
                     "  hx-swap=\"outerHTML swap:1s\" %s />",
-                    g_state.frames, g_state.shooting ? "disabled" : "");
+                    id, value, id, enabled ? "" : "disabled");
 }
 
 static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
+  bool enabled = g_state.initialized && g_state.connected && !g_state.shooting;
+
   return mg_xprintf(out, ptr,
                     "<div class=\"content inputs\">"
                     "  <fieldset>"
-                    "    <legend>Delay</legend>"
+                    "    <legend>Delay (seconds)</legend>"
                     "    <div>%M</div>"
                     "  </fieldset>"
                     "  <fieldset>"
-                    "    <legend>Exposure</legend>"
+                    "    <legend>Exposure (seconds)</legend>"
                     "    <div class=\"exposure\">%M</div>"
                     "  </fieldset>"
                     "  <fieldset>"
-                    "    <legend>Interval</legend>"
+                    "    <legend>Interval (seconds)</legend>"
                     "    <div class=\"interval\">%M</div>"
                     "  </fieldset>"
                     "  <fieldset>"
@@ -149,9 +98,10 @@ static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
                     "    <div class=\"frames\">%M</div>"
                     "  </fieldset>"
                     "</div>",
-                    render_time, "delay", g_state.delay, render_time,
-                    "exposure", g_state.exposure, render_time, "interval",
-                    g_state.interval, render_frames);
+                    render_input, "delay", g_state.delay, enabled,
+                    render_input, "exposure", g_state.exposure, enabled,
+                    render_input, "interval", g_state.interval, enabled,
+                    render_input, "frames", g_state.frames, enabled);
 }
 
 static size_t render_actions_content(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -159,28 +109,31 @@ static size_t render_actions_content(mg_pfn_t out, void *ptr, va_list *ap) {
 
   size += mg_xprintf(out, ptr, "<div class=\"content actions\">");
 
-  if (g_state.initialized) {
-    if (!g_state.shooting) {
-      size += mg_xprintf(out, ptr,
-                         "<button hx-post=\"/api/camera/start-shoot\" "
-                         "  hx-target=\"#content\" hx-swap=\"outerHTML "
-                         "  swap:1s\" %s>Start</button>",
-                         !g_state.connected ? "disabled" : "");
-    }
+  {
+    bool enabled = g_state.initialized && g_state.connected && !g_state.shooting;
+    size += mg_xprintf(out, ptr,
+                       "<button hx-post=\"/api/camera/start-shoot\" "
+                       "  hx-target=\"#content\" hx-swap=\"outerHTML "
+                       "  swap:1s\" %s>Start</button>",
+                       !enabled ? "disabled" : "");
+  }
 
-    if (g_state.shooting) {
-      size += mg_xprintf(out, ptr,
-                         "<button hx-post=\"/api/camera/stop-shoot\" "
-                         "  hx-target=\"#content\" hx-swap=\"outerHTML "
-                         "  swap:1s\">Stop</button>");
-    }
+  {
+    bool enabled = g_state.initialized && g_state.connected && g_state.shooting;
+    size += mg_xprintf(out, ptr,
+                       "<button hx-post=\"/api/camera/stop-shoot\" "
+                       "  hx-target=\"#content\" hx-swap=\"outerHTML "
+                       "  swap:1s\" %s>Stop</button>",
+                       !enabled ? "disabled" : "");
+  }
 
-    if (g_state.connected && !g_state.shooting) {
-      size += mg_xprintf(out, ptr,
-                         "<button hx-post=\"/api/camera/take-picture\" "
-                         "  hx-target=\"#content\" hx-swap=\"outerHTML "
-                         "  swap:1s\">Take Picture</button>");
-    }
+  {
+    bool enabled = g_state.initialized && g_state.connected && !g_state.shooting;
+    size += mg_xprintf(out, ptr,
+                       "<button hx-post=\"/api/camera/take-picture\" "
+                       "  hx-target=\"#content\" hx-swap=\"outerHTML "
+                       "  swap:1s\" %s>Take Picture</button>",
+                       !enabled ? "disabled" : "");
   }
 
   size += mg_xprintf(out, ptr, "</div>");
@@ -221,8 +174,8 @@ static void render_index_html_response(struct mg_connection *c) {
 }
 
 // lock state for rendering
-static void render_state_response(struct mg_connection *c) {
-  if (is_shooting()) {
+static void render_state_response(struct mg_connection *c, bool no_content) {
+  if (no_content && is_shooting()) {
     mg_http_reply(c, 204, CONTENT_TYPE_HTML, "No Content");
   } else {
     assert(pthread_mutex_lock(&g_state.mutex) == 0);
@@ -232,59 +185,25 @@ static void render_state_response(struct mg_connection *c) {
 }
 
 // lock state for rendering
-static void handle_time_input(struct mg_connection *c,
-                              const struct mg_http_message *hm, const char *id,
-                              const char *minutes_var, const char *seconds_var,
-                              long *out_value) {
+static void handle_input(struct mg_connection *c,
+                         const struct mg_http_message *hm,
+                         const char *variable,
+                         long *out_value) {
   struct mg_str body = hm->body;
 
+  MG_DEBUG(("Body = %.*s", body.len, body.ptr));
+
   char buf[32];
 
-  if (mg_http_get_var(&body, seconds_var, buf, sizeof(buf)) > 0) {
-    long value = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
-
+  if (mg_http_get_var(&body, variable, buf, sizeof(buf)) > 0) {
     pthread_mutex_lock(&g_state.mutex);
 
-    long minutes = *out_value / 60;
+    *out_value = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
 
-    *out_value = minutes * 60 + value;
+    if (*out_value < 0)
+      *out_value = 0;
 
-    mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_seconds, id,
-                  *out_value);
-
-    pthread_mutex_unlock(&g_state.mutex);
-  } else if (mg_http_get_var(&body, minutes_var, buf, sizeof(buf)) > 0) {
-    long value = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
-
-    pthread_mutex_lock(&g_state.mutex);
-
-    long seconds = *out_value % 60;
-
-    *out_value = value * 60 + seconds;
-
-    mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_minutes, id,
-                  *out_value);
-
-    pthread_mutex_unlock(&g_state.mutex);
-  } else {
-    render_error(c, "Some unknown error");
-  }
-}
-
-// lock state for rendering
-static void handle_frames_input(struct mg_connection *c,
-                                const struct mg_http_message *hm) {
-  char buf[32];
-
-  if (mg_http_get_var(&hm->body, "frames", buf, sizeof(buf)) > 0) {
-    pthread_mutex_lock(&g_state.mutex);
-
-    g_state.frames = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
-
-    if (g_state.frames < 0)
-      g_state.frames = 0;
-
-    mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_frames);
+    mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_input, variable, *out_value, g_state.shooting);
 
     pthread_mutex_unlock(&g_state.mutex);
   } else {
@@ -304,22 +223,19 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
     bool is_post = mg_vcmp(&method, "POST") == 0;
 
     if (is_post && mg_http_match_uri(hm, "/api/state/delay")) {
-      return handle_time_input(c, hm, "delay", "delay-minutes", "delay-seconds",
-                               &g_state.delay);
+      return handle_input(c, hm, "delay", &g_state.delay);
     }
 
     if (is_post && mg_http_match_uri(hm, "/api/state/exposure")) {
-      return handle_time_input(c, hm, "exposure", "exposure-minutes",
-                               "exposure-seconds", &g_state.exposure);
+      return handle_input(c, hm, "exposure", &g_state.exposure);
     }
 
     if (is_post && mg_http_match_uri(hm, "/api/state/interval")) {
-      return handle_time_input(c, hm, "interval", "interval-minutes",
-                               "interval-seconds", &g_state.interval);
+      return handle_input(c, hm, "interval", &g_state.interval);
     }
 
     if (is_post && mg_http_match_uri(hm, "/api/state/frames")) {
-      return handle_frames_input(c, hm);
+      return handle_input(c, hm, "frames", &g_state.frames);
     }
 
     if (is_get && mg_http_match_uri(hm, "/api/camera")) {
@@ -329,18 +245,17 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
 
     if (is_post && mg_http_match_uri(hm, "/api/camera/connect")) {
       async_queue_post(&g_queue, CONNECT, 0, NULL, false);
-      return render_camera_response(c);
+      return render_state_response(c, false);
     }
 
     if (is_post && mg_http_match_uri(hm, "/api/camera/disconnect")) {
       async_queue_post(&g_queue, DISCONNECT, 0, NULL, false);
-      return render_camera_response(c);
+      return render_state_response(c, false);
     }
 
     if (is_post && mg_http_match_uri(hm, "/api/camera/start-shoot")) {
       async_queue_post(&g_queue, START_SHOOTING, 0, NULL, false);
-
-      return render_state_response(c);
+      return render_state_response(c, false);
     }
 
     if (is_post && mg_http_match_uri(hm, "/api/camera/stop-shoot")) {
@@ -350,18 +265,16 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
       abort_timer();
 
       async_queue_post(&g_queue, STOP_SHOOTING, 0, NULL, true);
-
-      return render_state_response(c);
+      return render_state_response(c, false);
     }
 
     if (is_post && mg_http_match_uri(hm, "/api/camera/take-picture")) {
       async_queue_post(&g_queue, TAKE_PICTURE, 0, NULL, false);
-
-      return render_state_response(c);
+      return render_state_response(c, false);
     }
 
     if (is_get && mg_http_match_uri(hm, "/api/camera/state")) {
-      return render_state_response(c);
+      return render_state_response(c, true);
     }
 
     if (is_get) {

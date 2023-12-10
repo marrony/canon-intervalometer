@@ -56,8 +56,7 @@ select {
   row-gap: 30px;
 }
 
-.content .inputs .time {
-  font-size: 25px;
+.content .inputs div {
   display: flex;
   flex-direction: row;
   column-gap: 2px;
@@ -65,22 +64,9 @@ select {
   justify-content: flex-end;
 }
 
-.content .inputs .time input {
+.content .inputs div input {
   text-align: end;
   padding-right: 15px;
-}
-
-.content .inputs .frames input {
-  text-align: end;
-  padding-right: 15px;
-}
-
-.content .inputs .frames {
-  display: flex;
-  flex-direction: row;
-  column-gap: 2px;
-  align-items: center;
-  justify-content: flex-end;
 }
 
 .content .actions {

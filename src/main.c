@@ -1,3 +1,5 @@
+#include <signal.h>
+
 #include "camera.h"
 #include "http.h"
 
