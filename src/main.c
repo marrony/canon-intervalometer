@@ -382,19 +382,23 @@ static void take_picture_command(const struct command_t *cmd) {
 
     bool success = press_shutter(&start_ns);
 
-    if (success)
-      success = start_timer_ns(exposure_ns - delay_average_ns);
+    if (success) {
+      g_state.shooting = start_timer_ns(exposure_ns - delay_average_ns);
+    }
 
-    if (success)
-      success = release_shutter(&end_ns);
+    success = release_shutter(&end_ns);
 
     if (success)
       add_delay((end_ns - start_ns) - exposure_ns);
   }
 
-  if (++g_state.frames_taken < g_state.frames) {
-    start_timer_ns(g_state.interval * NANOS);
-    async_queue_post(&g_queue, TAKE_PICTURE, 0, NULL, true);
+  if (g_state.shooting && ++g_state.frames_taken < g_state.frames) {
+    if (start_timer_ns(g_state.interval * NANOS)) {
+      async_queue_post(&g_queue, TAKE_PICTURE, 0, NULL, true);
+    } else {
+      MG_DEBUG(("Stop shooting"));
+      g_state.shooting = false;
+    }
   } else {
     MG_DEBUG(("Stop shooting"));
     g_state.shooting = false;
@@ -405,13 +409,19 @@ static void start_shooting_command(const struct command_t *cmd) {
   g_state.frames_taken = 0;
   g_state.shooting = true;
 
-  if (g_state.delay > 0)
-    start_timer_ns(g_state.delay * NANOS);
+  if (g_state.delay > 0) {
+    if (!start_timer_ns(g_state.delay * NANOS)) {
+      g_state.shooting = false;
+      return;
+    }
+  }
 
   async_queue_post(&g_queue, TAKE_PICTURE, 0, NULL, true);
 }
 
 static void stop_shooting_command(const struct command_t *cmd) {
+  // fixme: this won't work because this thread is already
+  // locked on start_timer_ns()
   abort_timer();
   g_state.shooting = false;
 }
@@ -774,6 +784,11 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
     }
 
     if (is_post && mg_http_match_uri(hm, "/api/camera/stop-shoot")) {
+      // fixme: need to abort timer in this thread because the main
+      // thread is locked on start_timer_ns() so it will not pull
+      // another command from the queue until the timer times out.
+      abort_timer();
+
       async_queue_post(&g_queue, STOP_SHOOTING, 0, NULL, false);
 
       mg_http_reply(c, 200,
