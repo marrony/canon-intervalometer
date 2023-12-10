@@ -112,12 +112,6 @@ static void fix_root_dir(const char *argv) {
   snprintf(s_root_dir, PATH_MAX, "%s/web_root", dirname(temp_dir));
 }
 
-static size_t print_camera(void (*out)(char, void *), void *ptr, va_list *ap) {
-  return mg_xprintf(out, ptr, "{%m:%m,%m:%d}", MG_ESC("description"),
-                    MG_ESC(g_state.description), MG_ESC("handle"),
-                    g_state.camera);
-}
-
 static size_t print_state(void (*out)(char, void *), void *ptr, va_list *ap) {
   return mg_xprintf(
       out, ptr, "{%m:%s,%m:%s,%m:%ld,%m:%ld,%m:%ld,%m:%ld,%m:%ld}",
@@ -135,16 +129,6 @@ static void serialize_state(struct mg_connection *c) {
                 "Access-Control-Allow-Origin: *\r\n",
                 "{%m:%m,%m:%M}\n", MG_ESC("status"), MG_ESC("success"),
                 MG_ESC("state"), print_state);
-  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
-}
-
-static void serialize_camera(struct mg_connection *c) {
-  assert(pthread_mutex_lock(&g_state.mutex) == 0);
-  mg_http_reply(c, 200,
-                "Content-Type: application/json\r\n"
-                "Access-Control-Allow-Origin: *\r\n",
-                "{%m:%m,%m:%M,%m:%M}\n", MG_ESC("status"), MG_ESC("success"),
-                MG_ESC("camera"), print_camera, MG_ESC("state"), print_state);
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
@@ -480,6 +464,16 @@ static void command_processor() {
   }
 }
 
+static size_t lock_state(mg_pfn_t out, void *ptr, va_list *ap) {
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
+  return 0;
+}
+
+static size_t unlock_state(mg_pfn_t out, void *ptr, va_list *ap) {
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
+  return 0;
+}
+
 static size_t render_head(mg_pfn_t out, void *ptr, va_list *ap) {
   return mg_xprintf(out, ptr,
                     "<head>"
@@ -505,6 +499,13 @@ static size_t render_camera_content(mg_pfn_t out, void *ptr, va_list *ap) {
       MG_ESC(g_state.description));
 }
 
+static void render_camera(struct mg_connection *c) {
+  mg_http_reply(c, 200,
+                "Content-Type: text/html; charset=utf-8\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "%M%M%M", lock_state, render_camera_content, unlock_state);
+}
+
 static size_t render_select_options(mg_pfn_t out, void *ptr, va_list *ap) {
   const char *id = va_arg(*ap, const char *);
   const char *sub = va_arg(*ap, const char *);
@@ -514,7 +515,7 @@ static size_t render_select_options(mg_pfn_t out, void *ptr, va_list *ap) {
 
   size += mg_xprintf(out, ptr,
                      "<select name=\"%s-%s\" class=\"%s\" "
-                     "  hx-post=\"/state/%s\" hx-swap=\"outerHTML\">",
+                     "  hx-post=\"/api/state/%s\" hx-swap=\"outerHTML\">",
                      id, sub, sub, id);
 
   for (int i = 0; i < 60; i++) {
@@ -557,7 +558,7 @@ static size_t render_time(mg_pfn_t out, void *ptr, va_list *ap) {
 static size_t render_frames(mg_pfn_t out, void *ptr, va_list *ap) {
   return mg_xprintf(out, ptr,
                     "<input type=\"number\" name=\"frames\" value=\"%d\" "
-                    "  inputmode=\"numeric\" hx-post=\"/state/frames\" "
+                    "  inputmode=\"numeric\" hx-post=\"/api/state/frames\" "
                     "  hx-swap=\"outerHTML\" />",
                     g_state.frames);
 }
@@ -615,13 +616,13 @@ static void render_index_html(struct mg_connection *c) {
   mg_http_reply(c, 200,
                 "Content-Type: text/html; charset=utf-8\r\n"
                 "Access-Control-Allow-Origin: *\r\n",
-                "%M", render_html);
+                "%M%M%M", lock_state, render_html, unlock_state);
 }
 
-static void handle_time(struct mg_connection *c,
-                        const struct mg_http_message *hm, const char *id,
-                        const char *minutes_var, const char *seconds_var,
-                        long *out_value) {
+static void handle_time_input(struct mg_connection *c,
+                              const struct mg_http_message *hm, const char *id,
+                              const char *minutes_var, const char *seconds_var,
+                              long *out_value) {
   struct mg_str body = hm->body;
 
   MG_DEBUG(("Variable = %d %.*s", body.len, body.len, body.ptr));
@@ -638,7 +639,8 @@ static void handle_time(struct mg_connection *c,
     mg_http_reply(c, 200,
                   "Content-Type: text/html; charset=utf-8\r\n"
                   "Access-Control-Allow-Origin: *\r\n",
-                  "%M", render_seconds, id, *out_value);
+                  "%M%M%M", lock_state, render_seconds, id, *out_value,
+                  lock_state);
   } else if (mg_http_get_var(&body, minutes_var, buf, sizeof(buf)) > 0) {
     long value = mg_json_get_long(mg_str_n(buf, 32), "$", -1);
 
@@ -649,14 +651,15 @@ static void handle_time(struct mg_connection *c,
     mg_http_reply(c, 200,
                   "Content-Type: text/html; charset=utf-8\r\n"
                   "Access-Control-Allow-Origin: *\r\n",
-                  "%M", render_minutes, id, *out_value);
+                  "%M%M%M", lock_state, render_minutes, id, *out_value,
+                  unlock_state);
   } else {
     serialize_failure(c, "Some unknown error");
   }
 }
 
-static void handle_frames(struct mg_connection *c,
-                          const struct mg_http_message *hm) {
+static void handle_frames_input(struct mg_connection *c,
+                                const struct mg_http_message *hm) {
   char buf[32];
 
   if (mg_http_get_var(&hm->body, "frames", buf, sizeof(buf)) > 0) {
@@ -668,7 +671,7 @@ static void handle_frames(struct mg_connection *c,
     mg_http_reply(c, 200,
                   "Content-Type: text/html; charset=utf-8\r\n"
                   "Access-Control-Allow-Origin: *\r\n",
-                  "%M", render_frames);
+                  "%M%M%M", lock_state, render_frames, unlock_state);
   } else {
     serialize_failure(c, "Some unknown error");
   }
@@ -685,32 +688,33 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
     bool is_get = mg_vcmp(&method, "GET") == 0;
     bool is_post = mg_vcmp(&method, "POST") == 0;
 
-    if (is_post && mg_http_match_uri(hm, "/state/delay")) {
-      return handle_time(c, hm, "delay", "delay-minutes", "delay-seconds",
-                         &g_state.delay);
-    } else if (is_post && mg_http_match_uri(hm, "/state/exposure")) {
-      return handle_time(c, hm, "exposure", "exposure-minutes",
-                         "exposure-seconds", &g_state.exposure);
-    } else if (is_post && mg_http_match_uri(hm, "/state/interval")) {
-      return handle_time(c, hm, "interval", "interval-minutes",
-                         "interval-seconds", &g_state.interval);
-    } else if (is_post && mg_http_match_uri(hm, "/state/frames")) {
-      return handle_frames(c, hm);
+    if (is_post && mg_http_match_uri(hm, "/api/state/delay")) {
+      return handle_time_input(c, hm, "delay", "delay-minutes", "delay-seconds",
+                               &g_state.delay);
+    }
+
+    if (is_post && mg_http_match_uri(hm, "/api/state/exposure")) {
+      return handle_time_input(c, hm, "exposure", "exposure-minutes",
+                               "exposure-seconds", &g_state.exposure);
+    }
+
+    if (is_post && mg_http_match_uri(hm, "/api/state/interval")) {
+      return handle_time_input(c, hm, "interval", "interval-minutes",
+                               "interval-seconds", &g_state.interval);
+    }
+
+    if (is_post && mg_http_match_uri(hm, "/api/state/frames")) {
+      return handle_frames_input(c, hm);
     }
 
     if (is_get && mg_http_match_uri(hm, "/api/camera")) {
-      strcpy(g_state.description, "Canon R50");
-      mg_http_reply(c, 200,
-                    "Content-Type: text/html; charset=utf-8\r\n"
-                    "Access-Control-Allow-Origin: *\r\n",
-                    "%M", render_camera_content);
-      // async_queue_post(&g_queue, INITIALIZE, 0, NULL, false);
-      //
-      // if (is_initialized()) {
-      //   serialize_camera(c);
-      // } else {
-      //   serialize_failure(c, "No cameras detected");
-      // }
+      async_queue_post(&g_queue, INITIALIZE, 0, NULL, false);
+
+      if (is_initialized()) {
+        render_camera(c);
+      } else {
+        serialize_failure(c, "No cameras detected");
+      }
     } else if (is_post && mg_http_match_uri(hm, "/api/camera/connect")) {
       async_queue_post(&g_queue, CONNECT, 0, NULL, false);
 
