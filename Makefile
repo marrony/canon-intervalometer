@@ -27,10 +27,12 @@ HDRS := src/queue.h src/timer.h src/mongoose.h
 SRCS := src/main.c src/queue.c src/timer.c src/mongoose.c
 OBJS := $(patsubst src/%.c, bin/%.o, $(SRCS))
 
-all: bin bin/web_root bin/main
+.PHONY: all
+
+all: bin bin/web_root bin/main $(DEPS)
 
 bin/main: $(OBJS)
-	gcc $(LDFLAGS) -o $@ $^
+	gcc -o $@ $^ $(LDFLAGS)
 
 bin/%.o: src/%.c $(HDRS) Makefile
 	gcc -Wall $(CFLAGS) -o $@ -c $<

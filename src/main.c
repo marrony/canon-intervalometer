@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <EDSDK.h>
 #include <assert.h>
 #include <libgen.h>

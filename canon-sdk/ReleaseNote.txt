@@ -1,10 +1,21 @@
 ------------------------------------------------------------------------------------------
-                             Ver 13.17.10 Release Note
-                                   08/23/2023 
+                             Ver 13.17.12 Release Note
+                                   11/15/2023 
                                    Canon Inc.
 ------------------------------------------------------------------------------------------
 
 1.History
+
+11/15/2023 Ver 13.17.12 Release
+	* Minor bug fixes and Improvements.
+
+10/17/2023 Ver 13.17.11 Release
+	* Added EOS R50 for Models with confirmed operation
+		* kEdsPropID_FocusShiftSetting
+		* kEdsPropID_MovieHFRSetting
+		* kEdsCameraCommand_SetModeDialDisable
+
+
 08/23/2023 Ver 13.17.10 Release
 	* Released a Linux version.(ARMv8 32bit/64bit)
 	* Added support for the PowerShot V10
