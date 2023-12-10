@@ -21,7 +21,7 @@ struct queue_t {
 
 #define QUEUE_INITIALIZER                                                      \
   {                                                                            \
-    .buffer = {0}, .size = 0, .nextin = 0, .nextout = 0,                       \
+    .buffer = {{}}, .size = 0, .nextin = 0, .nextout = 0,                      \
     .mutex = PTHREAD_MUTEX_INITIALIZER, .produced = PTHREAD_COND_INITIALIZER,  \
     .consumed = PTHREAD_COND_INITIALIZER                                       \
   }

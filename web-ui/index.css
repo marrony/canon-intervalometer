@@ -103,3 +103,35 @@ input[type=number] {
   -moz-appearance: textfield;
   appearance: none;
 }
+
+.htmx-indicator {
+  /* display: none; */
+  background: red;
+}
+
+.htmx-request {
+  background: blue;
+}
+
+.htmx-request .htmx-indicator {
+  /* display: inline; */
+  background: green;
+}
+
+.htmx-request.htmx-indicator {
+  /* display: inline; */
+  background: yellow;
+}
+
+.htmx-swapping {
+  background: cyan;
+}
+
+.htmx-added {
+  background: greenyellow;
+  border: 10px solid red;
+}
+
+.htmx-settling {
+  background: blueviolet;
+}

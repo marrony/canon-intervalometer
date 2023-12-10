@@ -19,4 +19,6 @@ struct command_t {
   } cmd_data;
 };
 
+void command_processor();
+
 #endif // COMMAND_H

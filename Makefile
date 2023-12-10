@@ -23,8 +23,8 @@ CFLAGS += -DTARGET_OS_LINUX
 DEPS += bin/libEDSDK.so
 endif
 
-HDRS := src/queue.h src/timer.h src/mongoose.h
-SRCS := src/main.c src/queue.c src/timer.c src/mongoose.c
+HDRS := src/camera.h src/http.h src/queue.h src/timer.h src/mongoose.h
+SRCS := src/main.c src/camera.c src/http.c src/queue.c src/timer.c src/mongoose.c
 OBJS := $(patsubst src/%.c, bin/%.o, $(SRCS))
 
 .PHONY: all
@@ -58,6 +58,8 @@ sync:
 	git submodule sync
 	git submodule update --init --recursive --remote
 
+to_check := $(filter-out src/mongoose.c, $(SRCS))
+
 cppcheck:
-	cppcheck --force --enable=all --suppress=missingIncludeSystem --std=c99 $(CFLAGS) src/main.c
+	cppcheck --force --enable=all --suppress=missingIncludeSystem --std=c99 $(CFLAGS) $(to_check)
 
