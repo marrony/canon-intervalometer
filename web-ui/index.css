@@ -65,6 +65,11 @@ select {
   justify-content: flex-end;
 }
 
+.content .inputs .time input {
+  text-align: end;
+  padding-right: 15px;
+}
+
 .content .inputs .frames input {
   text-align: end;
   padding-right: 15px;

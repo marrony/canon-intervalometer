@@ -13,17 +13,9 @@ enum command_type {
   TERMINATE,
 };
 
-struct start_shooting_cmd {
-  long delay;
-  long exposure;
-  long interval;
-  long frames;
-};
-
 struct command_t {
   enum command_type type;
   union {
-    struct start_shooting_cmd start_shooting;
   } cmd_data;
 };
 
