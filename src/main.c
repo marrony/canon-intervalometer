@@ -1,9 +1,11 @@
+// clang-format: off
 #include <stdbool.h>
+// clang-format: on
+
 #include <EDSDK.h>
 #include <assert.h>
 #include <libgen.h>
 #include <pthread.h>
-#include <stdbool.h>
 #include <stdlib.h>
 
 #include "mongoose.h"
