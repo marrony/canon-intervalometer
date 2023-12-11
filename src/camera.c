@@ -34,7 +34,7 @@ struct camera_state_t g_state = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
     .running = true,
     .delay = 1,
-    .exposure = 5,
+    .exposure_ns = 5 * NANOS,
     .interval = 1,
     .frames = 2,
     .frames_taken = 0,
@@ -310,11 +310,11 @@ static void take_picture_command(const struct command_t *cmd) {
   if (!g_state.initialized || !g_state.connected)
     return;
 
-  if (g_state.exposure == 0) {
+  if (g_state.exposure_ns == 0) {
     press_shutter(NULL);
     release_shutter(NULL);
   } else {
-    int64_t exposure_ns = g_state.exposure * NANOS;
+    int64_t exposure_ns = g_state.exposure_ns;
     int64_t delay_average_ns = get_delay_average();
 
     int64_t start_ns, end_ns;
@@ -413,3 +413,76 @@ void command_processor() {
   }
 }
 
+/*
+0x0C Bulb
+0x10 30"
+0x13 25"
+0x14 20"
+0x18 15"
+0x1B 13"
+0x1C 10"
+0x20 8"
+0x24 6"
+0x25 5"
+0x28 4"
+0x2B 3"2
+0x2C 3"
+0x2D 2"5
+0x30 2"
+0x33 1"6
+0x34 1"5
+0x35 1"3
+0x38 1"
+0x3B 0"8
+0x3C 0"7
+0x3D 0"6
+0x40 0"5
+0x43 0"4
+0x44 0"3
+
+0x48 1/4
+0x4B 1/5
+0x4C 1/6
+0x50 1/8
+0x54 1/10
+0x55 1/13
+0x58 1/15
+0x5C 1/20
+0x5D 1/25
+0x60 1/30
+0x63 1/40
+0x64 1/45
+0x65 1/50
+0x68 1/60
+0x6B 1/80
+0x6C 1/90
+0x6D 1/100
+0x70 1/125
+0x73 1/160
+0x74 1/180
+0x75 1/200
+0x78 1/250
+0x7B 1/320
+0x7C 1/350
+0x7D 1/400
+0x80 1/500
+0x83 1/640
+0x84 1/750
+0x85 1/800
+0x88 1/1000
+0x8B 1/1250
+0x8C 1/1500
+0x8D 1/1600
+0x90 1/2000
+0x93 1/2500
+0x94 1/3000
+0x95 1/3200
+0x98 1/4000
+0x9B 1/5000
+0x9C 1/6000
+0x9D 1/6400
+0xA0 1/8000
+0xA3 1/10000
+0xA5 1/12800
+0xA8 1/16000
+*/

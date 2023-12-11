@@ -14,7 +14,7 @@ struct camera_state_t {
   pthread_mutex_t mutex;
   bool running;
   long delay;
-  long exposure;
+  int64_t exposure_ns;
   long interval;
   long frames;
   long frames_taken;

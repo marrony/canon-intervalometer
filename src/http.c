@@ -1,4 +1,5 @@
 #include <libgen.h>
+#include <stdio.h>
 
 #include "camera.h"
 #include "mongoose.h"
@@ -64,6 +65,10 @@ static void render_camera_response(struct mg_connection *c) {
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
+static bool inputs_enabled() {
+  return true || g_state.initialized && g_state.connected && !g_state.shooting;
+}
+
 static size_t render_input(mg_pfn_t out, void *ptr, va_list *ap) {
   const char *id = va_arg(*ap, const char *);
   long value = va_arg(*ap, long);
@@ -76,8 +81,23 @@ static size_t render_input(mg_pfn_t out, void *ptr, va_list *ap) {
                     id, value, id, enabled ? "" : "disabled");
 }
 
-static bool inputs_enabled() {
-  return g_state.initialized && g_state.connected && !g_state.shooting;
+static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
+  char value[32] = {0};
+
+  if (g_state.exposure_ns >= 300 * MICROS) {
+    float seconds = g_state.exposure_ns / (float)NANOS;
+    snprintf(value, sizeof(value), "%.1f", seconds);
+  } else {
+    int seconds = NANOS / g_state.exposure_ns;
+    snprintf(value, sizeof(value), "1/%d", seconds);
+  }
+
+  return mg_xprintf(out, ptr,
+                    "<input type=\"text\" name=\"exposure\" "
+                    "  pattern=\"\\d{1,3}(\\.\\d)?|1/\\d{1,5}\" value=\"%s\" "
+                    "  hx-post=\"/api/camera/state/exposure\" "
+                    "  hx-swap=\"outerHTML swap:1s\" %s />",
+                    value, inputs_enabled() ? "" : "disabled");
 }
 
 static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -102,10 +122,9 @@ static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
                     "    <div class=\"frames\">%M</div>"
                     "  </fieldset>"
                     "</div>",
-                    render_input, "delay", g_state.delay, enabled, render_input,
-                    "exposure", g_state.exposure, enabled, render_input,
-                    "interval", g_state.interval, enabled, render_input,
-                    "frames", g_state.frames, enabled);
+                    render_input, "delay", g_state.delay, enabled,
+                    render_exposure, render_input, "interval", g_state.interval,
+                    enabled, render_input, "frames", g_state.frames, enabled);
 }
 
 static size_t render_actions_content(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -228,7 +247,31 @@ static void handle_input_delay(struct mg_connection *c,
 
 static void handle_input_exposure(struct mg_connection *c,
                                   struct mg_http_message *hm) {
-  handle_input(c, &hm->body, "exposure", &g_state.exposure);
+  char buf[32];
+
+  if (mg_http_get_var(&hm->body, "exposure", buf, sizeof(buf)) > 0) {
+    long exposure = 0;
+    int32_t exposure_int = 0;
+    float exposure_float = 0;
+
+    if (sscanf(buf, "1/%d", &exposure_int) == 1) {
+      exposure = NANOS / exposure_int;
+    } else if (sscanf(buf, "%f", &exposure_float) == 1) {
+      exposure = exposure_float * NANOS;
+    } else {
+      exposure = 1;
+    }
+
+    pthread_mutex_lock(&g_state.mutex);
+
+    g_state.exposure_ns = exposure;
+
+    mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_exposure);
+
+    pthread_mutex_unlock(&g_state.mutex);
+  } else {
+    render_error(c, "Some unknown error");
+  }
 }
 
 static void handle_input_interval(struct mg_connection *c,
