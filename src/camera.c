@@ -5,8 +5,11 @@
 #include <EDSDK.h>
 #include <assert.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
+#include <string.h>
 
+#include "EDSDKTypes.h"
 #include "camera.h"
 #include "mongoose.h"
 #include "queue.h"
@@ -27,14 +30,14 @@ static int64_t get_system_nanos() {
 #else
   clock_gettime(CLOCK_REALTIME, &ts);
 #endif
-  return (int64_t)ts.tv_sec * NANOS + (int64_t)ts.tv_nsec;
+  return (int64_t)ts.tv_sec * SEC_TO_NS + (int64_t)ts.tv_nsec;
 }
 
-struct camera_state_t g_state = {
+static struct camera_state_t g_state = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
     .running = true,
     .delay = 1,
-    .exposure_ns = 5 * NANOS,
+    .exposure_ns = 5 * SEC_TO_NS,
     .interval = 1,
     .frames = 2,
     .frames_taken = 0,
@@ -45,30 +48,30 @@ struct camera_state_t g_state = {
     .camera = NULL,
 };
 
-struct sync_queue_t g_queue = {
+struct sync_queue_t g_main_queue = {
     .queue = QUEUE_INITIALIZER,
     .sync_mutex = PTHREAD_MUTEX_INITIALIZER,
     .sync_wait = PTHREAD_COND_INITIALIZER,
     .processed = 0,
 };
 
-bool is_initialized() {
+struct exposure_t {
+  int64_t shutter_speed_ns;
+  uint8_t shutter_speed;
+};
+
+static struct exposure_t g_exposures[];
+static int g_exposures_size;
+
+void get_copy_state(struct camera_state_t *state) {
   assert(pthread_mutex_lock(&g_state.mutex) == 0);
-  bool ret = g_state.initialized;
+  memcpy(state, &g_state, sizeof(struct camera_state_t));
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
-  return ret;
 }
 
-bool is_connected() {
+bool is_running() {
   assert(pthread_mutex_lock(&g_state.mutex) == 0);
-  bool ret = g_state.connected;
-  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
-  return ret;
-}
-
-bool is_shooting() {
-  assert(pthread_mutex_lock(&g_state.mutex) == 0);
-  bool ret = g_state.shooting;
+  bool ret = g_state.running;
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
   return ret;
 }
@@ -239,16 +242,20 @@ static void initialize_command(const struct command_t *cmd) {
   }
 }
 
-static void set_bulb_mode() {
-  MG_DEBUG(("Setting camera to Bulb mode"));
+static void set_shutter_speed(EdsUInt32 shutter_speed) {
+  MG_DEBUG(("Setting shutter speed = %x", shutter_speed));
 
-  EdsUInt32 shutterSpeed = 0x0c;
   EdsError err = EdsSetPropertyData(g_state.camera, kEdsPropID_Tv, 0,
-                                    sizeof(EdsUInt32), &shutterSpeed);
+                                    sizeof(EdsUInt32), &shutter_speed);
 
   if (err != EDS_ERR_OK) {
-    MG_DEBUG(("Error setting camera to Bulb mode"));
+    MG_DEBUG(("Error setting shutter speed"));
   }
+}
+
+static void set_bulb_mode() {
+  MG_DEBUG(("Setting camera to Bulb mode"));
+  set_shutter_speed(0x0C);
 }
 
 static void lock_ui() {
@@ -310,9 +317,9 @@ static void take_picture_command(const struct command_t *cmd) {
   if (!g_state.initialized || !g_state.connected)
     return;
 
-  if (g_state.exposure_ns == 0) {
+  if (g_state.exposure_ns < g_exposures_size) {
+    // using native time
     press_shutter(NULL);
-    release_shutter(NULL);
   } else {
     int64_t exposure_ns = g_state.exposure_ns;
     int64_t delay_average_ns = get_delay_average();
@@ -332,8 +339,8 @@ static void take_picture_command(const struct command_t *cmd) {
   }
 
   if (g_state.shooting && ++g_state.frames_taken < g_state.frames) {
-    if (start_timer_ns(g_state.interval * NANOS)) {
-      async_queue_post(&g_queue, TAKE_PICTURE, 0, NULL, true);
+    if (start_timer_ns(g_state.interval * SEC_TO_NS)) {
+      async_queue_post(&g_main_queue, TAKE_PICTURE, 0, NULL, true);
     } else {
       MG_DEBUG(("Stop shooting"));
       g_state.shooting = false;
@@ -348,14 +355,20 @@ static void start_shooting_command(const struct command_t *cmd) {
   g_state.frames_taken = 0;
   g_state.shooting = true;
 
+  if (g_state.exposure_ns < g_exposures_size) {
+    set_shutter_speed(g_exposures[g_state.exposure_ns].shutter_speed);
+  } else {
+    set_bulb_mode();
+  }
+
   if (g_state.delay > 0) {
-    if (!start_timer_ns(g_state.delay * NANOS)) {
+    if (!start_timer_ns(g_state.delay * SEC_TO_NS)) {
       g_state.shooting = false;
       return;
     }
   }
 
-  async_queue_post(&g_queue, TAKE_PICTURE, 0, NULL, true);
+  async_queue_post(&g_main_queue, TAKE_PICTURE, 0, NULL, true);
 }
 
 static void stop_shooting_command(const struct command_t *cmd) {
@@ -389,13 +402,21 @@ static const command_handler_t command_table[] = {
     [TERMINATE] = terminate_command,
 };
 
+static void sig_handler(int sig) {
+  async_queue_post(&g_main_queue, DISCONNECT, 0, NULL, true);
+  async_queue_post(&g_main_queue, TERMINATE, 0, NULL, true);
+}
+
 void command_processor() {
+  signal(SIGTERM, sig_handler);
+  signal(SIGINT, sig_handler);
+
   while (g_state.running) {
     struct command_t cmd = {
         .type = NO_OP,
     };
 
-    int32_t slot = async_queue_dequeue(&g_queue, &cmd, 500 * MICROS);
+    int32_t slot = async_queue_dequeue(&g_main_queue, &cmd, 500 * MILLI_TO_NS);
 
     if (slot < 0) {
       EdsGetEvent();
@@ -409,80 +430,173 @@ void command_processor() {
 
     handler(&cmd);
 
-    async_queue_unlock(&g_queue, slot);
+    async_queue_unlock(&g_main_queue, slot);
   }
 }
 
-/*
-0x0C Bulb
-0x10 30"
-0x13 25"
-0x14 20"
-0x18 15"
-0x1B 13"
-0x1C 10"
-0x20 8"
-0x24 6"
-0x25 5"
-0x28 4"
-0x2B 3"2
-0x2C 3"
-0x2D 2"5
-0x30 2"
-0x33 1"6
-0x34 1"5
-0x35 1"3
-0x38 1"
-0x3B 0"8
-0x3C 0"7
-0x3D 0"6
-0x40 0"5
-0x43 0"4
-0x44 0"3
+int64_t find_best_match(int64_t value);
 
-0x48 1/4
-0x4B 1/5
-0x4C 1/6
-0x50 1/8
-0x54 1/10
-0x55 1/13
-0x58 1/15
-0x5C 1/20
-0x5D 1/25
-0x60 1/30
-0x63 1/40
-0x64 1/45
-0x65 1/50
-0x68 1/60
-0x6B 1/80
-0x6C 1/90
-0x6D 1/100
-0x70 1/125
-0x73 1/160
-0x74 1/180
-0x75 1/200
-0x78 1/250
-0x7B 1/320
-0x7C 1/350
-0x7D 1/400
-0x80 1/500
-0x83 1/640
-0x84 1/750
-0x85 1/800
-0x88 1/1000
-0x8B 1/1250
-0x8C 1/1500
-0x8D 1/1600
-0x90 1/2000
-0x93 1/2500
-0x94 1/3000
-0x95 1/3200
-0x98 1/4000
-0x9B 1/5000
-0x9C 1/6000
-0x9D 1/6400
-0xA0 1/8000
-0xA3 1/10000
-0xA5 1/12800
-0xA8 1/16000
-*/
+void set_exposure(const char *value_str) {
+  pthread_mutex_lock(&g_state.mutex);
+
+  int32_t exposure_int = 0;
+  float exposure_float = 0;
+
+  if (sscanf(value_str, "1/%d", &exposure_int) == 1) {
+    g_state.exposure_ns = SEC_TO_NS / exposure_int;
+  } else if (sscanf(value_str, "%f", &exposure_float) == 1) {
+    g_state.exposure_ns = exposure_float * SEC_TO_NS;
+  }
+
+  g_state.exposure_ns = find_best_match(g_state.exposure_ns);
+
+  pthread_mutex_unlock(&g_state.mutex);
+}
+
+void set_delay(const char *value_str) {
+  pthread_mutex_lock(&g_state.mutex);
+
+  int32_t delay = 0;
+  if (sscanf(value_str, "%d", &delay) == 1) {
+    g_state.delay = delay;
+  }
+
+  pthread_mutex_unlock(&g_state.mutex);
+}
+
+void set_interval(const char *value_str) {
+  pthread_mutex_lock(&g_state.mutex);
+
+  int32_t interval = 0;
+  if (sscanf(value_str, "%d", &interval) == 1) {
+    g_state.interval = interval;
+  }
+
+  pthread_mutex_unlock(&g_state.mutex);
+}
+
+void set_frames(const char *value_str) {
+  pthread_mutex_lock(&g_state.mutex);
+
+  int32_t frames = 0;
+  if (sscanf(value_str, "%d", &frames) == 1) {
+    g_state.frames = frames;
+  }
+
+  pthread_mutex_unlock(&g_state.mutex);
+}
+
+void get_exposure(char *value_str, size_t size) {
+  int64_t exposure = g_state.exposure_ns;
+
+  if (exposure < g_exposures_size) {
+    exposure = g_exposures[exposure].shutter_speed_ns;
+  }
+
+  // if exposure >= 300ms use decimal format
+  // otherwise use fractional format
+  if (exposure >= 300 * MILLI_TO_NS) {
+    float seconds = exposure / (float)SEC_TO_NS;
+    snprintf(value_str, size, "%.1f", seconds);
+  } else {
+    int seconds = SEC_TO_NS / exposure;
+    snprintf(value_str, size, "1/%d", seconds);
+  }
+}
+
+// todo: check if camera support all these timmings
+// otherwise need to filter out the possibilities
+static struct exposure_t g_exposures[] = {
+    // {.shutter_speed_ns = 0xFFFFFFFFFFFFFF, .shutter_speed = 0x0C},
+    {.shutter_speed_ns = 30000000000ull, .shutter_speed = 0x10},
+    {.shutter_speed_ns = 25000000000ull, .shutter_speed = 0x13},
+    {.shutter_speed_ns = 20000000000ull, .shutter_speed = 0x14},
+    {.shutter_speed_ns = 15000000000ull, .shutter_speed = 0x18},
+    {.shutter_speed_ns = 13000000000ull, .shutter_speed = 0x1B},
+    {.shutter_speed_ns = 10000000000ull, .shutter_speed = 0x1C},
+    {.shutter_speed_ns = 8000000000ull, .shutter_speed = 0x20},
+    {.shutter_speed_ns = 6000000000ull, .shutter_speed = 0x24},
+    {.shutter_speed_ns = 5000000000ull, .shutter_speed = 0x25},
+    {.shutter_speed_ns = 4000000000ull, .shutter_speed = 0x28},
+    {.shutter_speed_ns = 3200000000ull, .shutter_speed = 0x2B},
+    {.shutter_speed_ns = 3000000000ull, .shutter_speed = 0x2C},
+    {.shutter_speed_ns = 2500000000ull, .shutter_speed = 0x2D},
+    {.shutter_speed_ns = 2000000000ull, .shutter_speed = 0x30},
+    {.shutter_speed_ns = 1600000000ull, .shutter_speed = 0x33},
+    {.shutter_speed_ns = 1500000000ull, .shutter_speed = 0x34},
+    {.shutter_speed_ns = 1300000000ull, .shutter_speed = 0x35},
+    {.shutter_speed_ns = 1000000000ull, .shutter_speed = 0x38},
+    {.shutter_speed_ns = 800000000ull, .shutter_speed = 0x3B},
+    {.shutter_speed_ns = 700000000ull, .shutter_speed = 0x3C},
+    {.shutter_speed_ns = 600000000ull, .shutter_speed = 0x3D},
+    {.shutter_speed_ns = 500000000ull, .shutter_speed = 0x40},
+    {.shutter_speed_ns = 400000000ull, .shutter_speed = 0x43},
+    {.shutter_speed_ns = 300000000ull, .shutter_speed = 0x44},
+    {.shutter_speed_ns = SEC_TO_NS / 4, .shutter_speed = 0x48},
+    {.shutter_speed_ns = SEC_TO_NS / 5, .shutter_speed = 0x4B},
+    {.shutter_speed_ns = SEC_TO_NS / 6, .shutter_speed = 0x4C},
+    {.shutter_speed_ns = SEC_TO_NS / 8, .shutter_speed = 0x50},
+    {.shutter_speed_ns = SEC_TO_NS / 10, .shutter_speed = 0x54},
+    {.shutter_speed_ns = SEC_TO_NS / 13, .shutter_speed = 0x55},
+    {.shutter_speed_ns = SEC_TO_NS / 15, .shutter_speed = 0x58},
+    {.shutter_speed_ns = SEC_TO_NS / 20, .shutter_speed = 0x5C},
+    {.shutter_speed_ns = SEC_TO_NS / 25, .shutter_speed = 0x5D},
+    {.shutter_speed_ns = SEC_TO_NS / 30, .shutter_speed = 0x60},
+    {.shutter_speed_ns = SEC_TO_NS / 40, .shutter_speed = 0x63},
+    {.shutter_speed_ns = SEC_TO_NS / 45, .shutter_speed = 0x64},
+    {.shutter_speed_ns = SEC_TO_NS / 50, .shutter_speed = 0x65},
+    {.shutter_speed_ns = SEC_TO_NS / 60, .shutter_speed = 0x68},
+    {.shutter_speed_ns = SEC_TO_NS / 80, .shutter_speed = 0x6B},
+    {.shutter_speed_ns = SEC_TO_NS / 90, .shutter_speed = 0x6C},
+    {.shutter_speed_ns = SEC_TO_NS / 100, .shutter_speed = 0x6D},
+    {.shutter_speed_ns = SEC_TO_NS / 125, .shutter_speed = 0x70},
+    {.shutter_speed_ns = SEC_TO_NS / 160, .shutter_speed = 0x73},
+    {.shutter_speed_ns = SEC_TO_NS / 180, .shutter_speed = 0x74},
+    {.shutter_speed_ns = SEC_TO_NS / 200, .shutter_speed = 0x75},
+    {.shutter_speed_ns = SEC_TO_NS / 250, .shutter_speed = 0x78},
+    {.shutter_speed_ns = SEC_TO_NS / 320, .shutter_speed = 0x7B},
+    {.shutter_speed_ns = SEC_TO_NS / 350, .shutter_speed = 0x7C},
+    {.shutter_speed_ns = SEC_TO_NS / 400, .shutter_speed = 0x7D},
+    {.shutter_speed_ns = SEC_TO_NS / 500, .shutter_speed = 0x80},
+    {.shutter_speed_ns = SEC_TO_NS / 640, .shutter_speed = 0x83},
+    {.shutter_speed_ns = SEC_TO_NS / 750, .shutter_speed = 0x84},
+    {.shutter_speed_ns = SEC_TO_NS / 800, .shutter_speed = 0x85},
+    {.shutter_speed_ns = SEC_TO_NS / 1000, .shutter_speed = 0x88},
+    {.shutter_speed_ns = SEC_TO_NS / 1250, .shutter_speed = 0x8B},
+    {.shutter_speed_ns = SEC_TO_NS / 1500, .shutter_speed = 0x8C},
+    {.shutter_speed_ns = SEC_TO_NS / 1600, .shutter_speed = 0x8D},
+    {.shutter_speed_ns = SEC_TO_NS / 2000, .shutter_speed = 0x90},
+    {.shutter_speed_ns = SEC_TO_NS / 2500, .shutter_speed = 0x93},
+    {.shutter_speed_ns = SEC_TO_NS / 3000, .shutter_speed = 0x94},
+    {.shutter_speed_ns = SEC_TO_NS / 3200, .shutter_speed = 0x95},
+    {.shutter_speed_ns = SEC_TO_NS / 4000, .shutter_speed = 0x98},
+    {.shutter_speed_ns = SEC_TO_NS / 5000, .shutter_speed = 0x9B},
+    {.shutter_speed_ns = SEC_TO_NS / 6000, .shutter_speed = 0x9C},
+    {.shutter_speed_ns = SEC_TO_NS / 6400, .shutter_speed = 0x9D},
+    {.shutter_speed_ns = SEC_TO_NS / 8000, .shutter_speed = 0xA0},
+    {.shutter_speed_ns = SEC_TO_NS / 10000, .shutter_speed = 0xA3},
+    {.shutter_speed_ns = SEC_TO_NS / 12800, .shutter_speed = 0xA5},
+    {.shutter_speed_ns = SEC_TO_NS / 16000, .shutter_speed = 0xA8},
+};
+
+static int g_exposures_size = sizeof(g_exposures) / sizeof(struct exposure_t);
+
+int64_t find_best_match(int64_t value) {
+  int best_match = -1;
+  int64_t min_diff = 0x1fffffffffffffff;
+
+  for (int i = g_exposures_size - 1; i >= 0; i--) {
+    int64_t shutter_speed = g_exposures[i].shutter_speed_ns;
+    int64_t diff = llabs(value - shutter_speed);
+
+    if (diff == 0)
+      return i;
+
+    if (diff < min_diff) {
+      best_match = i;
+      min_diff = diff;
+    }
+  }
+
+  return best_match >= 0 ? best_match : value;
+}

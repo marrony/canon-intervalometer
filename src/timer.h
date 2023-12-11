@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include <time.h>
 
-#define NANOS (MICROS * 1000ll)
-#define MICROS (MILLIS * 1000ll)
-#define MILLIS (1000ll)
+#define MICRO_TO_NS 1000ull
+#define MILLI_TO_NS 1000000ull
+#define SEC_TO_NS 1000000000ull
 
 void adjust_timer_ns(struct timespec *ts, int64_t timer_ns);
 bool start_timer_ns(int64_t timer_ns);

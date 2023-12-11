@@ -5,19 +5,19 @@
 #include <stdbool.h>
 // clang-format: on
 
+#include "queue.h"
+
 #include <EDSDK.h>
 #include <pthread.h>
-
-#include "queue.h"
 
 struct camera_state_t {
   pthread_mutex_t mutex;
   bool running;
-  long delay;
+  int64_t delay;
   int64_t exposure_ns;
-  long interval;
-  long frames;
-  long frames_taken;
+  int64_t interval;
+  int64_t frames;
+  int64_t frames_taken;
   bool initialized;
   bool connected;
   bool shooting;
@@ -25,9 +25,18 @@ struct camera_state_t {
   EdsCameraRef camera;
 };
 
-extern struct camera_state_t g_state;
-extern struct sync_queue_t g_queue;
+extern struct sync_queue_t g_main_queue;
 
-bool is_shooting();
+void command_processor();
+
+void get_copy_state(struct camera_state_t *state);
+bool is_running();
+
+void set_exposure(const char *value_str);
+void set_delay(const char *value_str);
+void set_interval(const char *value_str);
+void set_frames(const char *value_str);
+
+void get_exposure(char *value_str, size_t size);
 
 #endif // CAMERA_H

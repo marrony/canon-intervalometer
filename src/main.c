@@ -1,20 +1,10 @@
-#include <signal.h>
-
 #include "camera.h"
 #include "http.h"
 
 static pthread_t http_server;
 static pthread_t main_thread;
 
-static void sig_handler(int sig) {
-  async_queue_post(&g_queue, DISCONNECT, 0, NULL, true);
-  async_queue_post(&g_queue, TERMINATE, 0, NULL, true);
-}
-
 int main(int argc, const char *argv[]) {
-  signal(SIGTERM, sig_handler);
-  signal(SIGINT, sig_handler);
-
   main_thread = pthread_self();
 
 #if 0

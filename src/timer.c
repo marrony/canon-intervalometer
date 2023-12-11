@@ -26,11 +26,11 @@ static struct {
 void adjust_timer_ns(struct timespec *ts, int64_t timer_ns) {
   clock_gettime(CLOCK_REALTIME, ts);
 
-  ts->tv_sec += timer_ns / NANOS;
-  ts->tv_nsec += timer_ns % NANOS;
+  ts->tv_sec += timer_ns / SEC_TO_NS;
+  ts->tv_nsec += timer_ns % SEC_TO_NS;
 
-  ts->tv_sec += ts->tv_nsec / NANOS;
-  ts->tv_nsec = ts->tv_nsec % NANOS;
+  ts->tv_sec += ts->tv_nsec / SEC_TO_NS;
+  ts->tv_nsec = ts->tv_nsec % SEC_TO_NS;
 }
 
 bool start_timer_ns(int64_t timer_ns) {
