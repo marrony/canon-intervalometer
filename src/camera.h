@@ -10,12 +10,24 @@
 #include <EDSDK.h>
 #include <pthread.h>
 
+enum command_type {
+  NO_OP,
+  INITIALIZE,
+  DEINITIALIZE,
+  CONNECT,
+  DISCONNECT,
+  TAKE_PICTURE,
+  START_SHOOTING,
+  STOP_SHOOTING,
+  TERMINATE,
+};
+
 struct camera_state_t {
   pthread_mutex_t mutex;
   bool running;
-  int64_t delay;
+  int64_t delay_ns;
   int64_t exposure_ns;
-  int64_t interval;
+  int64_t interval_ns;
   int64_t frames;
   int64_t frames_taken;
   bool initialized;

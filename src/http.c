@@ -138,10 +138,10 @@ static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
                     "    <div class=\"frames\">%M</div>"
                     "  </fieldset>"
                     "</div>",
-                    render_input, "delay", state->delay, enabled,
+                    render_input, "delay", state->delay_ns / SEC_TO_NS, enabled,
                     render_exposure, state, render_input, "interval",
-                    state->interval, enabled, render_input, "frames",
-                    state->frames, enabled);
+                    state->interval_ns / SEC_TO_NS, enabled, render_input,
+                    "frames", state->frames, enabled);
 }
 
 static size_t render_actions_content(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -261,7 +261,8 @@ static void handle_input_delay(struct mg_connection *c,
 
   struct camera_state_t state;
   get_copy_state(&state);
-  render_input_response(c, "delay", state.delay, inputs_enabled(&state));
+  render_input_response(c, "delay", state.delay_ns / SEC_TO_NS,
+                        inputs_enabled(&state));
 }
 
 static void handle_input_interval(struct mg_connection *c,
@@ -272,7 +273,8 @@ static void handle_input_interval(struct mg_connection *c,
 
   struct camera_state_t state;
   get_copy_state(&state);
-  render_input_response(c, "interval", state.interval, inputs_enabled(&state));
+  render_input_response(c, "interval", state.interval_ns / SEC_TO_NS,
+                        inputs_enabled(&state));
 }
 
 static void handle_input_frames(struct mg_connection *c,
@@ -288,7 +290,7 @@ static void handle_input_frames(struct mg_connection *c,
 
 static void handle_get_camera(struct mg_connection *c,
                               struct mg_http_message *hm) {
-  async_queue_post(&g_main_queue, INITIALIZE, 0, NULL, /*async*/ false);
+  async_queue_post(&g_main_queue, INITIALIZE, NULL, /*async*/ false);
   render_camera_response(c);
 }
 
@@ -299,19 +301,19 @@ static void handle_get_state(struct mg_connection *c,
 
 static void handle_camera_connect(struct mg_connection *c,
                                   struct mg_http_message *hm) {
-  async_queue_post(&g_main_queue, CONNECT, 0, NULL, /*async*/ false);
+  async_queue_post(&g_main_queue, CONNECT, NULL, /*async*/ false);
   render_state_response(c, false);
 }
 
 static void handle_camera_disconnect(struct mg_connection *c,
                                      struct mg_http_message *hm) {
-  async_queue_post(&g_main_queue, DISCONNECT, 0, NULL, /*async*/ false);
+  async_queue_post(&g_main_queue, DISCONNECT, NULL, /*async*/ false);
   render_state_response(c, false);
 }
 
 static void handle_camera_start_shoot(struct mg_connection *c,
                                       struct mg_http_message *hm) {
-  async_queue_post(&g_main_queue, START_SHOOTING, 0, NULL, /*async*/ false);
+  async_queue_post(&g_main_queue, START_SHOOTING, NULL, /*async*/ false);
   render_state_response(c, false);
 }
 
@@ -322,13 +324,13 @@ static void handle_camera_stop_shoot(struct mg_connection *c,
   // another command from the queue until the timer times out.
   abort_timer();
 
-  async_queue_post(&g_main_queue, STOP_SHOOTING, 0, NULL, /*async*/ true);
+  async_queue_post(&g_main_queue, STOP_SHOOTING, NULL, /*async*/ true);
   render_state_response(c, false);
 }
 
 static void handle_camera_take_picture(struct mg_connection *c,
                                        struct mg_http_message *hm) {
-  async_queue_post(&g_main_queue, TAKE_PICTURE, 0, NULL, /*async*/ false);
+  async_queue_post(&g_main_queue, TAKE_PICTURE, NULL, /*async*/ false);
   render_state_response(c, false);
 }
 

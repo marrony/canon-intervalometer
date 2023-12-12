@@ -36,9 +36,9 @@ static int64_t get_system_nanos() {
 static struct camera_state_t g_state = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
     .running = true,
-    .delay = 1,
+    .delay_ns = 1 * SEC_TO_NS,
     .exposure_ns = 5 * SEC_TO_NS,
-    .interval = 1,
+    .interval_ns = 1 * SEC_TO_NS,
     .frames = 2,
     .frames_taken = 0,
     .initialized = false,
@@ -210,9 +210,9 @@ static bool release_shutter(int64_t *ts) {
   return true;
 }
 
-static void no_op_command(const struct command_t *cmd) {}
+static void no_op_command(void *data) {}
 
-static void deinitialize_command(const struct command_t *cmd) {
+static void deinitialize_command(void *data) {
   if (g_state.initialized) {
     EdsTerminateSDK();
   }
@@ -220,7 +220,7 @@ static void deinitialize_command(const struct command_t *cmd) {
   g_state.connected = false;
 }
 
-static void initialize_command(const struct command_t *cmd) {
+static void initialize_command(void *data) {
   if (!g_state.initialized) {
     MG_DEBUG(("Initializing"));
 
@@ -276,7 +276,7 @@ static void unlock_ui() {
   }
 }
 
-static void connect_command(const struct command_t *cmd) {
+static void connect_command(void *data) {
   if (g_state.connected) {
     MG_DEBUG(("Already connected"));
     return;
@@ -295,7 +295,7 @@ static void connect_command(const struct command_t *cmd) {
   }
 }
 
-static void disconnect_command(const struct command_t *cmd) {
+static void disconnect_command(void *data) {
   if (!g_state.connected) {
     MG_DEBUG(("Already disconnected"));
     return;
@@ -313,7 +313,7 @@ static void disconnect_command(const struct command_t *cmd) {
   g_state.connected = false;
 }
 
-static void take_picture_command(const struct command_t *cmd) {
+static void take_picture_command(void *data) {
   if (!g_state.initialized || !g_state.connected)
     return;
 
@@ -321,7 +321,6 @@ static void take_picture_command(const struct command_t *cmd) {
     // using native time
     press_shutter(NULL);
   } else {
-    int64_t exposure_ns = g_state.exposure_ns;
     int64_t delay_average_ns = get_delay_average();
 
     int64_t start_ns, end_ns;
@@ -329,18 +328,18 @@ static void take_picture_command(const struct command_t *cmd) {
     bool success = press_shutter(&start_ns);
 
     if (success) {
-      g_state.shooting = start_timer_ns(exposure_ns - delay_average_ns);
+      g_state.shooting = start_timer_ns(g_state.exposure_ns - delay_average_ns);
     }
 
     success = release_shutter(&end_ns);
 
     if (success)
-      add_delay((end_ns - start_ns) - exposure_ns);
+      add_delay((end_ns - start_ns) - g_state.exposure_ns);
   }
 
   if (g_state.shooting && ++g_state.frames_taken < g_state.frames) {
-    if (start_timer_ns(g_state.interval * SEC_TO_NS)) {
-      async_queue_post(&g_main_queue, TAKE_PICTURE, 0, NULL, true);
+    if (start_timer_ns(g_state.interval_ns)) {
+      async_queue_post(&g_main_queue, TAKE_PICTURE, NULL, /*async*/ true);
     } else {
       MG_DEBUG(("Stop shooting"));
       g_state.shooting = false;
@@ -351,7 +350,7 @@ static void take_picture_command(const struct command_t *cmd) {
   }
 }
 
-static void start_shooting_command(const struct command_t *cmd) {
+static void start_shooting_command(void *data) {
   g_state.frames_taken = 0;
   g_state.shooting = true;
 
@@ -361,26 +360,24 @@ static void start_shooting_command(const struct command_t *cmd) {
     set_bulb_mode();
   }
 
-  if (g_state.delay > 0) {
-    if (!start_timer_ns(g_state.delay * SEC_TO_NS)) {
+  if (g_state.delay_ns > 0) {
+    if (!start_timer_ns(g_state.delay_ns)) {
       g_state.shooting = false;
       return;
     }
   }
 
-  async_queue_post(&g_main_queue, TAKE_PICTURE, 0, NULL, true);
+  async_queue_post(&g_main_queue, TAKE_PICTURE, NULL, /*async*/ true);
 }
 
-static void stop_shooting_command(const struct command_t *cmd) {
+static void stop_shooting_command(void *data) {
   // fixme: this won't work because this thread is already
   // locked on start_timer_ns()
   abort_timer();
   g_state.shooting = false;
 }
 
-static void terminate_command(const struct command_t *cmd) {
-  g_state.running = false;
-}
+static void terminate_command(void *data) { g_state.running = false; }
 
 static const char *command_names[] = {
     "NO_OP",          "INITIALIZE",    "DEINITIALIZE",
@@ -388,7 +385,7 @@ static const char *command_names[] = {
     "START_SHOOTING", "STOP_SHOOTING", "TERMINATE",
 };
 
-typedef void (*command_handler_t)(const struct command_t *);
+typedef void (*command_handler_t)(void *);
 
 static const command_handler_t command_table[] = {
     [NO_OP] = no_op_command,
@@ -403,8 +400,10 @@ static const command_handler_t command_table[] = {
 };
 
 static void sig_handler(int sig) {
-  async_queue_post(&g_main_queue, DISCONNECT, 0, NULL, true);
-  async_queue_post(&g_main_queue, TERMINATE, 0, NULL, true);
+  disconnect_command(NULL);
+  terminate_command(NULL);
+  // async_queue_post(&g_main_queue, DISCONNECT, /*async*/ true);
+  // async_queue_post(&g_main_queue, TERMINATE, /*async*/ true);
 }
 
 void command_processor() {
@@ -412,23 +411,23 @@ void command_processor() {
   signal(SIGINT, sig_handler);
 
   while (g_state.running) {
-    struct command_t cmd = {
-        .type = NO_OP,
-    };
+    int32_t cmd = NO_OP;
+    void *data = NULL;
 
-    int32_t slot = async_queue_dequeue(&g_main_queue, &cmd, 500 * MILLI_TO_NS);
+    int32_t slot = async_queue_dequeue_locked(&g_main_queue, &cmd, &data,
+                                              500 * MILLI_TO_NS);
 
     if (slot < 0) {
       EdsGetEvent();
       continue;
     }
 
-    const char *command_name = command_names[cmd.type];
-    command_handler_t handler = command_table[cmd.type];
+    const char *command_name = command_names[cmd];
+    command_handler_t handler = command_table[cmd];
 
     MG_DEBUG(("Command: %s on slot %d", command_name, slot));
 
-    handler(&cmd);
+    handler(data);
 
     async_queue_unlock(&g_main_queue, slot);
   }
@@ -458,7 +457,7 @@ void set_delay(const char *value_str) {
 
   int32_t delay = 0;
   if (sscanf(value_str, "%d", &delay) == 1) {
-    g_state.delay = delay;
+    g_state.delay_ns = delay * SEC_TO_NS;
   }
 
   pthread_mutex_unlock(&g_state.mutex);
@@ -469,7 +468,7 @@ void set_interval(const char *value_str) {
 
   int32_t interval = 0;
   if (sscanf(value_str, "%d", &interval) == 1) {
-    g_state.interval = interval;
+    g_state.interval_ns = interval * SEC_TO_NS;
   }
 
   pthread_mutex_unlock(&g_state.mutex);
