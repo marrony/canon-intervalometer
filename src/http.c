@@ -88,12 +88,12 @@ static size_t render_input(mg_pfn_t out, void *ptr, va_list *ap) {
   long value = va_arg(*ap, long);
   int enabled = va_arg(*ap, int);
 
-  return mg_xprintf(
-      out, ptr,
-      "<input type=\"number\" name=\"%s\" value=\"%d\" required min=\"0\" "
-      "  inputmode=\"decimal\" hx-post=\"/api/camera/state/%s\" "
-      "  hx-swap=\"outerHTML swap:1s\" %s />",
-      id, value, id, enabled ? "" : "disabled");
+  return mg_xprintf(out, ptr,
+                    "<input type=\"number\" name=\"%s\" value=\"%d\" required "
+                    "  hx-validate=\"true\" min=\"0\" inputmode=\"decimal\" "
+                    "  hx-post=\"/api/camera/state/%s\" "
+                    "  hx-swap=\"outerHTML swap:1s\" %s />",
+                    id, value, id, enabled ? "" : "disabled");
 }
 
 static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -322,6 +322,7 @@ static void handle_camera_stop_shoot(struct mg_connection *c,
   // fixme: need to abort timer in this thread because the main
   // thread is locked on start_timer_ns() so it will not pull
   // another command from the queue until the timer times out.
+  // fixme: abort only if timers is not native?
   abort_timer();
 
   async_queue_post(&g_main_queue, STOP_SHOOTING, NULL, /*async*/ true);

@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "EDSDKTypes.h"
 #include "camera.h"
 #include "mongoose.h"
 #include "queue.h"
