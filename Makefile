@@ -27,7 +27,7 @@ HDRS := src/camera.h src/http.h src/queue.h src/timer.h src/mongoose.h
 SRCS := src/main.c src/camera.c src/http.c src/queue.c src/timer.c src/mongoose.c
 OBJS := $(patsubst src/%.c, bin/%.o, $(SRCS))
 
-.PHONY: all
+.PHONY: all sync cppcheck update-mongoose
 
 all: bin bin/web_root/assets bin/main $(DEPS)
 
@@ -57,6 +57,11 @@ bin:
 sync:
 	git submodule sync
 	git submodule update --init --recursive --remote
+
+update-mongoose:
+	make sync
+	cp -f mongoose/mongoose.c src/mongoose.c
+	cp -f mongoose/mongoose.h src/mongoose.h
 
 to_check := $(filter-out src/mongoose.c, $(SRCS))
 
