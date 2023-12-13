@@ -30,7 +30,24 @@ input {
   width: 100%;
 }
 
+/* disable border of input when it's focused */
+input:focus {
+  border: 0px;
+  outline: transparent;
+}
+
+/* change color of fieldset when input is focused */
+fieldset:has(input:focus) {
+  border: 1px solid blue;
+}
+
+/* remove border of input when it's invalid */
 input:invalid {
+  border: 0px;
+}
+
+/* change color of fieldset when input is invalid */
+fieldset:has(input:invalid) {
   border: 1px solid red;
 }
 

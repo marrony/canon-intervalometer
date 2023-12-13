@@ -75,24 +75,29 @@ static void render_camera_response(struct mg_connection *c) {
   struct camera_state_t state;
   get_copy_state(&state);
 
-  mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_camera_content, state);
+  mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_camera_content, &state);
 }
 
 static bool inputs_enabled(const struct camera_state_t *state) {
   return true || (state->initialized && state->connected && !state->shooting);
 }
 
+struct input_t {
+  const char *id;
+  int32_t value;
+  bool enabled;
+};
+
 static size_t render_input(mg_pfn_t out, void *ptr, va_list *ap) {
-  const char *id = va_arg(*ap, const char *);
-  long value = va_arg(*ap, long);
-  int enabled = va_arg(*ap, int);
+  const struct input_t *input = va_arg(*ap, const struct input_t *);
 
   return mg_xprintf(out, ptr,
                     "<input type=\"number\" name=\"%s\" value=\"%d\" required "
                     "  hx-validate=\"true\" min=\"0\" inputmode=\"decimal\" "
                     "  hx-post=\"/api/camera/state/%s\" "
                     "  hx-swap=\"outerHTML\" %s />",
-                    id, value, id, enabled ? "" : "disabled");
+                    input->id, input->value, input->id,
+                    input->enabled ? "" : "disabled");
 }
 
 static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -101,7 +106,7 @@ static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
 
   char value[32] = {0};
 
-  get_exposure(value, sizeof(value));
+  get_exposure(state, value, sizeof(value));
 
   return mg_xprintf(
       out, ptr,
@@ -117,6 +122,22 @@ static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
       va_arg(*ap, const struct camera_state_t *);
 
   bool enabled = inputs_enabled(state);
+
+  struct input_t delay = {
+      .id = "delay",
+      .value = state->delay_ns / SEC_TO_NS,
+      .enabled = enabled,
+  };
+  struct input_t interval = {
+      .id = "interval",
+      .value = state->interval_ns / SEC_TO_NS,
+      .enabled = enabled,
+  };
+  struct input_t frames = {
+      .id = "frames",
+      .value = state->frames,
+      .enabled = enabled,
+  };
 
   return mg_xprintf(out, ptr,
                     "<div class=\"content inputs\">"
@@ -137,10 +158,8 @@ static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
                     "    <div class=\"frames\">%M</div>"
                     "  </fieldset>"
                     "</div>",
-                    render_input, "delay", state->delay_ns / SEC_TO_NS, enabled,
-                    render_exposure, state, render_input, "interval",
-                    state->interval_ns / SEC_TO_NS, enabled, render_input,
-                    "frames", state->frames, enabled);
+                    render_input, &delay, render_exposure, state, render_input,
+                    &interval, render_input, &frames);
 }
 
 static size_t render_actions_content(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -230,14 +249,13 @@ static void render_state_response(struct mg_connection *c, bool no_content) {
 }
 
 static void render_input_response(struct mg_connection *c, const char *variable,
-                                  long value, bool enabled) {
-  mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_input, variable, value,
-                enabled);
-}
-
-static void render_exposure_response(struct mg_connection *c,
-                                     const struct camera_state_t *state) {
-  mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_exposure, state);
+                                  int32_t value, bool enabled) {
+  struct input_t input = {
+      .id = variable,
+      .value = value,
+      .enabled = enabled,
+  };
+  mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_input, &input);
 }
 
 static void handle_input_exposure(struct mg_connection *c,
@@ -248,7 +266,7 @@ static void handle_input_exposure(struct mg_connection *c,
 
   struct camera_state_t state;
   get_copy_state(&state);
-  render_exposure_response(c, &state);
+  mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_exposure, &state);
 }
 
 static void handle_input_delay(struct mg_connection *c,
