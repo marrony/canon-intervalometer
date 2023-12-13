@@ -91,7 +91,6 @@ static size_t render_input(mg_pfn_t out, void *ptr, va_list *ap) {
                     "<input type=\"number\" name=\"%s\" value=\"%d\" required "
                     "  hx-validate=\"true\" min=\"0\" inputmode=\"decimal\" "
                     "  hx-post=\"/api/camera/state/%s\" "
-                    "  hx-trigger=\"keyup changed delay:500ms\" "
                     "  hx-swap=\"outerHTML\" %s />",
                     id, value, id, enabled ? "" : "disabled");
 }
@@ -109,7 +108,6 @@ static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
       "<input type=\"text\" name=\"exposure\" required hx-validate=\"true\" "
       "  pattern=\"\\d{1,3}(\\.\\d)?|1/\\d{1,5}\" value=\"%s\" "
       "  hx-post=\"/api/camera/state/exposure\" "
-      "  hx-trigger=\"changed delay:500ms\" "
       "  hx-swap=\"outerHTML\" %s />",
       value, inputs_enabled(state) ? "" : "disabled");
 }
