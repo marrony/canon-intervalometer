@@ -1,5 +1,5 @@
-htmx.config.defaultSettleDelay = 1000;
-htmx.config.defaultSwapDelay = 1000;
+// htmx.config.defaultSettleDelay = 0;
+// htmx.config.defaultSwapDelay = 0;
 
 htmx.on("htmx:after-swap", function(evt) {
   if (evt.target && evt.target.nodeName === "INPUT")

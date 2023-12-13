@@ -49,22 +49,21 @@ static size_t render_camera_content(mg_pfn_t out, void *ptr, va_list *ap) {
 
   if (state->initialized) {
     if (state->connected) {
-      size +=
-          mg_xprintf(out, ptr,
-                     "  <button hx-post=\"/api/camera/disconnect\" "
-                     "hx-target=\"#content\" "
-                     "    hx-swap=\"outerHTML swap:1s\">Disconnect</button>");
+      size += mg_xprintf(
+          out, ptr,
+          "<button hx-post=\"/api/camera/disconnect\" "
+          "  hx-target=\"#content\" hx-swap=\"outerHTML\">Disconnect</button>");
     } else {
-      size += mg_xprintf(out, ptr,
-                         "  <button hx-post=\"/api/camera/connect\" "
-                         "hx-target=\"#content\" "
-                         "    hx-swap=\"outerHTML swap:1s\">Connect</button>");
+      size += mg_xprintf(
+          out, ptr,
+          "<button hx-post=\"/api/camera/connect\" "
+          "  hx-target=\"#content\" hx-swap=\"outerHTML\">Connect</button>");
     }
   } else {
     size += mg_xprintf(
         out, ptr,
-        "  <button hx-get=\"/api/camera\" hx-target=\"#camera-content\" "
-        "    hx-swap=\"outerHTML swap:1s\">Refresh</button>");
+        "<button hx-get=\"/api/camera\" hx-target=\"#camera-content\" "
+        "  hx-swap=\"outerHTML\">Refresh</button>");
   }
 
   size += mg_xprintf(out, ptr, "</div>");
@@ -92,7 +91,8 @@ static size_t render_input(mg_pfn_t out, void *ptr, va_list *ap) {
                     "<input type=\"number\" name=\"%s\" value=\"%d\" required "
                     "  hx-validate=\"true\" min=\"0\" inputmode=\"decimal\" "
                     "  hx-post=\"/api/camera/state/%s\" "
-                    "  hx-swap=\"outerHTML swap:1s\" %s />",
+                    "  hx-trigger=\"keyup changed delay:500ms\" "
+                    "  hx-swap=\"outerHTML\" %s />",
                     id, value, id, enabled ? "" : "disabled");
 }
 
@@ -109,7 +109,8 @@ static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
       "<input type=\"text\" name=\"exposure\" required hx-validate=\"true\" "
       "  pattern=\"\\d{1,3}(\\.\\d)?|1/\\d{1,5}\" value=\"%s\" "
       "  hx-post=\"/api/camera/state/exposure\" "
-      "  hx-swap=\"outerHTML swap:1s\" %s />",
+      "  hx-trigger=\"changed delay:500ms\" "
+      "  hx-swap=\"outerHTML\" %s />",
       value, inputs_enabled(state) ? "" : "disabled");
 }
 
@@ -154,29 +155,29 @@ static size_t render_actions_content(mg_pfn_t out, void *ptr, va_list *ap) {
 
   {
     bool enabled = state->initialized && state->connected && !state->shooting;
-    size += mg_xprintf(out, ptr,
-                       "<button hx-post=\"/api/camera/start-shoot\" "
-                       "  hx-target=\"#content\" hx-swap=\"outerHTML "
-                       "  swap:1s\" %s>Start</button>",
-                       !enabled ? "disabled" : "");
+    size += mg_xprintf(
+        out, ptr,
+        "<button hx-post=\"/api/camera/start-shoot\" "
+        "  hx-target=\"#content\" hx-swap=\"outerHTML\" %s>Start</button>",
+        !enabled ? "disabled" : "");
   }
 
   {
     bool enabled = state->initialized && state->connected && state->shooting;
-    size += mg_xprintf(out, ptr,
-                       "<button hx-post=\"/api/camera/stop-shoot\" "
-                       "  hx-target=\"#content\" hx-swap=\"outerHTML "
-                       "  swap:1s\" %s>Stop</button>",
-                       !enabled ? "disabled" : "");
+    size += mg_xprintf(
+        out, ptr,
+        "<button hx-post=\"/api/camera/stop-shoot\" "
+        "  hx-target=\"#content\" hx-swap=\"outerHTML\" %s>Stop</button>",
+        !enabled ? "disabled" : "");
   }
 
   {
     bool enabled = state->initialized && state->connected && !state->shooting;
-    size += mg_xprintf(out, ptr,
-                       "<button hx-post=\"/api/camera/take-picture\" "
-                       "  hx-target=\"#content\" hx-swap=\"outerHTML "
-                       "  swap:1s\" %s>Take Picture</button>",
-                       !enabled ? "disabled" : "");
+    size += mg_xprintf(
+        out, ptr,
+        "<button hx-post=\"/api/camera/take-picture\" hx-target=\"#content\" "
+        "  hx-swap=\"outerHTML\" %s>Take Picture</button>",
+        !enabled ? "disabled" : "");
   }
 
   size += mg_xprintf(out, ptr, "</div>");
@@ -188,11 +189,10 @@ static size_t render_content(mg_pfn_t out, void *ptr, va_list *ap) {
   const struct camera_state_t *state =
       va_arg(*ap, const struct camera_state_t *);
 
-  const char *refresh =
-      state->shooting
-          ? "hx-get=\"/api/camera/state\" hx-swap=\"outerHTML swap:1s\" "
-            "hx-trigger=\"every 2s\""
-          : "";
+  const char *refresh = state->shooting
+                            ? "hx-get=\"/api/camera/state\" "
+                              "hx-swap=\"outerHTML\" hx-trigger=\"every 2s\""
+                            : "";
 
   return mg_xprintf(
       out, ptr, "<div id=\"content\" class=\"content\" %s>%M%M%M</div>",
