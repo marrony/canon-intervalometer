@@ -11,9 +11,9 @@
 
 void adjust_timer_ns(struct timespec *ts, int64_t timer_ns);
 bool start_timer_ns(int64_t timer_ns);
-void abort_timer();
+void abort_timer(void);
 
-int64_t get_delay_average();
+int64_t get_delay_average(void);
 void add_delay(int64_t delay);
 
 #endif // TIMER_H

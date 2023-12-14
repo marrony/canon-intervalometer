@@ -16,15 +16,14 @@
 #include "timer.h"
 
 // todo: use builtin camera timers
-static int64_t find_best_match(int64_t value);
-static void fill_exposures();
-static void copy_all_exposures();
+static void fill_exposures(void);
+static void copy_all_exposures(void);
 
 #ifdef __MACOS__
 extern __uint64_t __thread_selfid(void);
 #endif
 
-static int64_t get_system_nanos() {
+static int64_t get_system_nanos(void) {
   struct timespec ts = {0, 0};
 #if defined(CLOCK_MONOTONIC_RAW)
   clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
@@ -71,8 +70,83 @@ struct exposure_t {
   EdsUInt32 shutter_param;
 };
 
-static struct exposure_t g_exposures[];
-static int g_exposures_size;
+static const struct exposure_t g_all_exposures[] = {
+    // {.shutter_speed_ns = 0xFFFFFFFFFFFFFF, .shutter_speed = 0x0C},
+    {.shutter_speed_ns = 30000000000ull, .shutter_param = 0x10},
+    {.shutter_speed_ns = 25000000000ull, .shutter_param = 0x13},
+    {.shutter_speed_ns = 20000000000ull, .shutter_param = 0x14},
+    {.shutter_speed_ns = 15000000000ull, .shutter_param = 0x18},
+    {.shutter_speed_ns = 13000000000ull, .shutter_param = 0x1B},
+    {.shutter_speed_ns = 10000000000ull, .shutter_param = 0x1C},
+    {.shutter_speed_ns = 8000000000ull, .shutter_param = 0x20},
+    {.shutter_speed_ns = 6000000000ull, .shutter_param = 0x24},
+    {.shutter_speed_ns = 5000000000ull, .shutter_param = 0x25},
+    {.shutter_speed_ns = 4000000000ull, .shutter_param = 0x28},
+    {.shutter_speed_ns = 3200000000ull, .shutter_param = 0x2B},
+    {.shutter_speed_ns = 3000000000ull, .shutter_param = 0x2C},
+    {.shutter_speed_ns = 2500000000ull, .shutter_param = 0x2D},
+    {.shutter_speed_ns = 2000000000ull, .shutter_param = 0x30},
+    {.shutter_speed_ns = 1600000000ull, .shutter_param = 0x33},
+    {.shutter_speed_ns = 1500000000ull, .shutter_param = 0x34},
+    {.shutter_speed_ns = 1300000000ull, .shutter_param = 0x35},
+    {.shutter_speed_ns = 1000000000ull, .shutter_param = 0x38},
+    {.shutter_speed_ns = 800000000ull, .shutter_param = 0x3B},
+    {.shutter_speed_ns = 700000000ull, .shutter_param = 0x3C},
+    {.shutter_speed_ns = 600000000ull, .shutter_param = 0x3D},
+    {.shutter_speed_ns = 500000000ull, .shutter_param = 0x40},
+    {.shutter_speed_ns = 400000000ull, .shutter_param = 0x43},
+    {.shutter_speed_ns = 300000000ull, .shutter_param = 0x44},
+    {.shutter_speed_ns = SEC_TO_NS / 4, .shutter_param = 0x48},
+    {.shutter_speed_ns = SEC_TO_NS / 5, .shutter_param = 0x4B},
+    {.shutter_speed_ns = SEC_TO_NS / 6, .shutter_param = 0x4C},
+    {.shutter_speed_ns = SEC_TO_NS / 8, .shutter_param = 0x50},
+    {.shutter_speed_ns = SEC_TO_NS / 10, .shutter_param = 0x54},
+    {.shutter_speed_ns = SEC_TO_NS / 13, .shutter_param = 0x55},
+    {.shutter_speed_ns = SEC_TO_NS / 15, .shutter_param = 0x58},
+    {.shutter_speed_ns = SEC_TO_NS / 20, .shutter_param = 0x5C},
+    {.shutter_speed_ns = SEC_TO_NS / 25, .shutter_param = 0x5D},
+    {.shutter_speed_ns = SEC_TO_NS / 30, .shutter_param = 0x60},
+    {.shutter_speed_ns = SEC_TO_NS / 40, .shutter_param = 0x63},
+    {.shutter_speed_ns = SEC_TO_NS / 45, .shutter_param = 0x64},
+    {.shutter_speed_ns = SEC_TO_NS / 50, .shutter_param = 0x65},
+    {.shutter_speed_ns = SEC_TO_NS / 60, .shutter_param = 0x68},
+    {.shutter_speed_ns = SEC_TO_NS / 80, .shutter_param = 0x6B},
+    {.shutter_speed_ns = SEC_TO_NS / 90, .shutter_param = 0x6C},
+    {.shutter_speed_ns = SEC_TO_NS / 100, .shutter_param = 0x6D},
+    {.shutter_speed_ns = SEC_TO_NS / 125, .shutter_param = 0x70},
+    {.shutter_speed_ns = SEC_TO_NS / 160, .shutter_param = 0x73},
+    {.shutter_speed_ns = SEC_TO_NS / 180, .shutter_param = 0x74},
+    {.shutter_speed_ns = SEC_TO_NS / 200, .shutter_param = 0x75},
+    {.shutter_speed_ns = SEC_TO_NS / 250, .shutter_param = 0x78},
+    {.shutter_speed_ns = SEC_TO_NS / 320, .shutter_param = 0x7B},
+    {.shutter_speed_ns = SEC_TO_NS / 350, .shutter_param = 0x7C},
+    {.shutter_speed_ns = SEC_TO_NS / 400, .shutter_param = 0x7D},
+    {.shutter_speed_ns = SEC_TO_NS / 500, .shutter_param = 0x80},
+    {.shutter_speed_ns = SEC_TO_NS / 640, .shutter_param = 0x83},
+    {.shutter_speed_ns = SEC_TO_NS / 750, .shutter_param = 0x84},
+    {.shutter_speed_ns = SEC_TO_NS / 800, .shutter_param = 0x85},
+    {.shutter_speed_ns = SEC_TO_NS / 1000, .shutter_param = 0x88},
+    {.shutter_speed_ns = SEC_TO_NS / 1250, .shutter_param = 0x8B},
+    {.shutter_speed_ns = SEC_TO_NS / 1500, .shutter_param = 0x8C},
+    {.shutter_speed_ns = SEC_TO_NS / 1600, .shutter_param = 0x8D},
+    {.shutter_speed_ns = SEC_TO_NS / 2000, .shutter_param = 0x90},
+    {.shutter_speed_ns = SEC_TO_NS / 2500, .shutter_param = 0x93},
+    {.shutter_speed_ns = SEC_TO_NS / 3000, .shutter_param = 0x94},
+    {.shutter_speed_ns = SEC_TO_NS / 3200, .shutter_param = 0x95},
+    {.shutter_speed_ns = SEC_TO_NS / 4000, .shutter_param = 0x98},
+    {.shutter_speed_ns = SEC_TO_NS / 5000, .shutter_param = 0x9B},
+    {.shutter_speed_ns = SEC_TO_NS / 6000, .shutter_param = 0x9C},
+    {.shutter_speed_ns = SEC_TO_NS / 6400, .shutter_param = 0x9D},
+    {.shutter_speed_ns = SEC_TO_NS / 8000, .shutter_param = 0xA0},
+    {.shutter_speed_ns = SEC_TO_NS / 10000, .shutter_param = 0xA3},
+    {.shutter_speed_ns = SEC_TO_NS / 12800, .shutter_param = 0xA5},
+    {.shutter_speed_ns = SEC_TO_NS / 16000, .shutter_param = 0xA8},
+};
+
+#define ALL_EXPOSURES_SIZE (sizeof(g_all_exposures) / sizeof(struct exposure_t))
+
+static struct exposure_t g_exposures[ALL_EXPOSURES_SIZE] = {0};
+static int g_exposures_size = 0;
 
 void get_copy_state(struct camera_state_t *state) {
   assert(pthread_mutex_lock(&g_state.mutex) == 0);
@@ -80,7 +154,7 @@ void get_copy_state(struct camera_state_t *state) {
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
-bool is_running() {
+bool is_running(void) {
   assert(pthread_mutex_lock(&g_state.mutex) == 0);
   bool ret = g_state.state.running;
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
@@ -105,7 +179,7 @@ static int nssleep(int64_t timer_ns) {
 }
 #endif
 
-static bool detect_connected_camera() {
+static bool detect_connected_camera(void) {
   EdsCameraListRef camera_list = NULL;
 
   if (EdsGetCameraList(&camera_list) == EDS_ERR_OK) {
@@ -266,12 +340,12 @@ static void set_shutter_speed(EdsUInt32 shutter_speed) {
   }
 }
 
-static void set_bulb_mode() {
+static void set_bulb_mode(void) {
   MG_DEBUG(("Setting camera to Bulb mode"));
   set_shutter_speed(0x0C);
 }
 
-static void lock_ui() {
+static void lock_ui(void) {
   EdsError err =
       EdsSendStatusCommand(g_state.camera, kEdsCameraStatusCommand_UILock, 0);
 
@@ -280,7 +354,7 @@ static void lock_ui() {
   }
 }
 
-static void unlock_ui() {
+static void unlock_ui(void) {
   EdsError err =
       EdsSendStatusCommand(g_state.camera, kEdsCameraStatusCommand_UIUnLock, 0);
 
@@ -433,7 +507,7 @@ static void sig_handler(int sig) {
   // async_queue_post(&g_main_queue, TERMINATE, /*async*/ true);
 }
 
-void command_processor() {
+void command_processor(void) {
   signal(SIGTERM, sig_handler);
   signal(SIGINT, sig_handler);
 
@@ -521,121 +595,21 @@ void get_exposure_at(int32_t index, char *value_str, size_t size) {
   format_exposure(g_exposures[index].shutter_speed_ns, value_str, size);
 }
 
-int32_t get_exposure_count() { return g_exposures_size; }
+int32_t get_exposure_count(void) { return g_exposures_size; }
 
 void format_exposure(int64_t exposure, char *value_str, size_t size) {
   // if exposure >= 300ms use decimal format
   // otherwise use fractional format
   if (exposure >= 300 * MILLI_TO_NS) {
-    int seconds = exposure / SEC_TO_NS;
-    snprintf(value_str, size, "%d\"", seconds);
+    float seconds = (float)exposure / SEC_TO_NS;
+    snprintf(value_str, size, "%.1f\"", seconds);
   } else {
     int seconds = SEC_TO_NS / exposure;
     snprintf(value_str, size, "1/%d\"", seconds);
   }
 }
 
-// todo: check if camera support all these timmings
-// otherwise need to filter out the possibilities
-static const struct exposure_t g_all_exposures[] = {
-    // {.shutter_speed_ns = 0xFFFFFFFFFFFFFF, .shutter_speed = 0x0C},
-    {.shutter_speed_ns = 30000000000ull, .shutter_param = 0x10},
-    {.shutter_speed_ns = 25000000000ull, .shutter_param = 0x13},
-    {.shutter_speed_ns = 20000000000ull, .shutter_param = 0x14},
-    {.shutter_speed_ns = 15000000000ull, .shutter_param = 0x18},
-    {.shutter_speed_ns = 13000000000ull, .shutter_param = 0x1B},
-    {.shutter_speed_ns = 10000000000ull, .shutter_param = 0x1C},
-    {.shutter_speed_ns = 8000000000ull, .shutter_param = 0x20},
-    {.shutter_speed_ns = 6000000000ull, .shutter_param = 0x24},
-    {.shutter_speed_ns = 5000000000ull, .shutter_param = 0x25},
-    {.shutter_speed_ns = 4000000000ull, .shutter_param = 0x28},
-    {.shutter_speed_ns = 3200000000ull, .shutter_param = 0x2B},
-    {.shutter_speed_ns = 3000000000ull, .shutter_param = 0x2C},
-    {.shutter_speed_ns = 2500000000ull, .shutter_param = 0x2D},
-    {.shutter_speed_ns = 2000000000ull, .shutter_param = 0x30},
-    {.shutter_speed_ns = 1600000000ull, .shutter_param = 0x33},
-    {.shutter_speed_ns = 1500000000ull, .shutter_param = 0x34},
-    {.shutter_speed_ns = 1300000000ull, .shutter_param = 0x35},
-    {.shutter_speed_ns = 1000000000ull, .shutter_param = 0x38},
-    {.shutter_speed_ns = 800000000ull, .shutter_param = 0x3B},
-    {.shutter_speed_ns = 700000000ull, .shutter_param = 0x3C},
-    {.shutter_speed_ns = 600000000ull, .shutter_param = 0x3D},
-    {.shutter_speed_ns = 500000000ull, .shutter_param = 0x40},
-    {.shutter_speed_ns = 400000000ull, .shutter_param = 0x43},
-    {.shutter_speed_ns = 300000000ull, .shutter_param = 0x44},
-    {.shutter_speed_ns = SEC_TO_NS / 4, .shutter_param = 0x48},
-    {.shutter_speed_ns = SEC_TO_NS / 5, .shutter_param = 0x4B},
-    {.shutter_speed_ns = SEC_TO_NS / 6, .shutter_param = 0x4C},
-    {.shutter_speed_ns = SEC_TO_NS / 8, .shutter_param = 0x50},
-    {.shutter_speed_ns = SEC_TO_NS / 10, .shutter_param = 0x54},
-    {.shutter_speed_ns = SEC_TO_NS / 13, .shutter_param = 0x55},
-    {.shutter_speed_ns = SEC_TO_NS / 15, .shutter_param = 0x58},
-    {.shutter_speed_ns = SEC_TO_NS / 20, .shutter_param = 0x5C},
-    {.shutter_speed_ns = SEC_TO_NS / 25, .shutter_param = 0x5D},
-    {.shutter_speed_ns = SEC_TO_NS / 30, .shutter_param = 0x60},
-    {.shutter_speed_ns = SEC_TO_NS / 40, .shutter_param = 0x63},
-    {.shutter_speed_ns = SEC_TO_NS / 45, .shutter_param = 0x64},
-    {.shutter_speed_ns = SEC_TO_NS / 50, .shutter_param = 0x65},
-    {.shutter_speed_ns = SEC_TO_NS / 60, .shutter_param = 0x68},
-    {.shutter_speed_ns = SEC_TO_NS / 80, .shutter_param = 0x6B},
-    {.shutter_speed_ns = SEC_TO_NS / 90, .shutter_param = 0x6C},
-    {.shutter_speed_ns = SEC_TO_NS / 100, .shutter_param = 0x6D},
-    {.shutter_speed_ns = SEC_TO_NS / 125, .shutter_param = 0x70},
-    {.shutter_speed_ns = SEC_TO_NS / 160, .shutter_param = 0x73},
-    {.shutter_speed_ns = SEC_TO_NS / 180, .shutter_param = 0x74},
-    {.shutter_speed_ns = SEC_TO_NS / 200, .shutter_param = 0x75},
-    {.shutter_speed_ns = SEC_TO_NS / 250, .shutter_param = 0x78},
-    {.shutter_speed_ns = SEC_TO_NS / 320, .shutter_param = 0x7B},
-    {.shutter_speed_ns = SEC_TO_NS / 350, .shutter_param = 0x7C},
-    {.shutter_speed_ns = SEC_TO_NS / 400, .shutter_param = 0x7D},
-    {.shutter_speed_ns = SEC_TO_NS / 500, .shutter_param = 0x80},
-    {.shutter_speed_ns = SEC_TO_NS / 640, .shutter_param = 0x83},
-    {.shutter_speed_ns = SEC_TO_NS / 750, .shutter_param = 0x84},
-    {.shutter_speed_ns = SEC_TO_NS / 800, .shutter_param = 0x85},
-    {.shutter_speed_ns = SEC_TO_NS / 1000, .shutter_param = 0x88},
-    {.shutter_speed_ns = SEC_TO_NS / 1250, .shutter_param = 0x8B},
-    {.shutter_speed_ns = SEC_TO_NS / 1500, .shutter_param = 0x8C},
-    {.shutter_speed_ns = SEC_TO_NS / 1600, .shutter_param = 0x8D},
-    {.shutter_speed_ns = SEC_TO_NS / 2000, .shutter_param = 0x90},
-    {.shutter_speed_ns = SEC_TO_NS / 2500, .shutter_param = 0x93},
-    {.shutter_speed_ns = SEC_TO_NS / 3000, .shutter_param = 0x94},
-    {.shutter_speed_ns = SEC_TO_NS / 3200, .shutter_param = 0x95},
-    {.shutter_speed_ns = SEC_TO_NS / 4000, .shutter_param = 0x98},
-    {.shutter_speed_ns = SEC_TO_NS / 5000, .shutter_param = 0x9B},
-    {.shutter_speed_ns = SEC_TO_NS / 6000, .shutter_param = 0x9C},
-    {.shutter_speed_ns = SEC_TO_NS / 6400, .shutter_param = 0x9D},
-    {.shutter_speed_ns = SEC_TO_NS / 8000, .shutter_param = 0xA0},
-    {.shutter_speed_ns = SEC_TO_NS / 10000, .shutter_param = 0xA3},
-    {.shutter_speed_ns = SEC_TO_NS / 12800, .shutter_param = 0xA5},
-    {.shutter_speed_ns = SEC_TO_NS / 16000, .shutter_param = 0xA8},
-};
-
-#define ALL_EXPOSURES_SIZE (sizeof(g_all_exposures) / sizeof(struct exposure_t))
-
-static struct exposure_t g_exposures[ALL_EXPOSURES_SIZE] = {0};
-static int g_exposures_size = 0;
-
-static int64_t find_best_match(int64_t value) {
-  int best_match = -1;
-  int64_t min_diff = 0x1fffffffffffffff;
-
-  for (int i = g_exposures_size - 1; i >= 0; i--) {
-    int64_t shutter_speed = g_exposures[i].shutter_speed_ns;
-    int64_t diff = llabs(value - shutter_speed);
-
-    if (diff == 0)
-      return i;
-
-    if (diff < min_diff) {
-      best_match = i;
-      min_diff = diff;
-    }
-  }
-
-  return best_match >= 0 ? best_match : value;
-}
-
-static void fill_exposures() {
+static void fill_exposures(void) {
   g_exposures_size = 0;
 
   EdsPropertyDesc property_desc = {0};
@@ -656,7 +630,7 @@ static void fill_exposures() {
   }
 }
 
-static void copy_all_exposures() {
+static void copy_all_exposures(void) {
   g_exposures_size = ALL_EXPOSURES_SIZE;
   memcpy(g_exposures, g_all_exposures, sizeof(g_all_exposures));
 }

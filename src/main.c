@@ -13,7 +13,7 @@ int main(int argc, const char *argv[]) {
   pthread_setschedparam(main_thread, SCHED_FIFO, &param);
 #endif
 
-  pthread_create(&http_server, NULL, http_server_thread, argv);
+  pthread_create(&http_server, NULL, http_server_thread, NULL);
 
   // EDSDK demands its api call to be in the main thread on MacOS
   command_processor();

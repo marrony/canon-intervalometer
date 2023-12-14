@@ -52,7 +52,7 @@ bool start_timer_ns(int64_t timer_ns) {
   return !aborted;
 }
 
-void abort_timer() {
+void abort_timer(void) {
   // at this point timer_mutex is unlock wating for the condition
   assert(pthread_mutex_lock(&g_timer.mutex) == 0);
   if (!g_timer.aborted)
@@ -72,7 +72,7 @@ void add_delay(int64_t delay) {
   }
 }
 
-int64_t get_delay_average() {
+int64_t get_delay_average(void) {
   if (g_timer.delays_length == 0)
     return 0;
 

@@ -39,10 +39,10 @@ struct camera_state_t {
 
 extern struct sync_queue_t g_main_queue;
 
-void command_processor();
+void command_processor(void);
 
 void get_copy_state(struct camera_state_t *state);
-bool is_running();
+bool is_running(void);
 
 void set_exposure_index(const char *index_str);
 void set_exposure_custom(const char *value_str);
@@ -52,6 +52,6 @@ void set_frames(const char *value_str);
 
 void get_exposure_at(int32_t index, char *value_str, size_t size);
 void format_exposure(int64_t value, char *value_str, size_t size);
-int32_t get_exposure_count();
+int32_t get_exposure_count(void);
 
 #endif // CAMERA_H

@@ -1,18 +1,21 @@
 UNAME_S := $(shell uname -s)
 
+common_cflags := -isystem ./canon-sdk/EDSDK/Header
+
 LDFLAGS := -lpthread
-CFLAGS := -Icanon-sdk/EDSDK/Header
+CFLAGS := $(common_cflags) -Wall -Werror -pedantic
+# CFLAGS += -Wsystem-headers
 DEPS :=
 
 ifeq ($(UNAME_S),Darwin)
 LDFLAGS += -Fcanon-sdk/EDSDK/Framework -framework EDSDK -rpath @executable_path/Framework
-CFLAGS += -D__MACOS__ -D__APPLE__
+CFLAGS += --std=c17 -D__MACOS__ -D__APPLE__
 DEPS += bin/Framework/EDSDK.framework
 endif
 
 ifeq ($(UNAME_S),Linux)
 ifeq ($(shell uname -m),armv7l)
-LIB_DIR += canon-sdk/EDSDK/Library/ARM32
+LIB_DIR = canon-sdk/EDSDK/Library/ARM32
 DEPS += bin/web_root
 endif
 ifeq ($(shell uname -m),armv8)
@@ -27,15 +30,16 @@ HDRS := src/camera.h src/http.h src/queue.h src/timer.h src/mongoose.h
 SRCS := src/main.c src/camera.c src/http.c src/queue.c src/timer.c src/mongoose.c
 OBJS := $(patsubst src/%.c, bin/%.o, $(SRCS))
 
-.PHONY: all sync cppcheck update-mongoose
+.PHONY: all sync cppcheck update-mongoose defs
 
 all: bin bin/web_root/assets bin/main $(DEPS)
 
 bin/main: $(OBJS)
+	cp run.sh bin/run.sh
 	gcc -o $@ $^ $(LDFLAGS)
 
 bin/%.o: src/%.c $(HDRS) Makefile
-	gcc -Wall $(CFLAGS) -o $@ -c $<
+	gcc $(CFLAGS) -o $@ -c $<
 
 web_root_deps := web-ui/index.css web-ui/index.js web-ui/htmx.min.js
 
@@ -66,5 +70,8 @@ update-mongoose:
 to_check := $(filter-out src/mongoose.c, $(SRCS))
 
 cppcheck:
-	cppcheck --force --enable=all --suppress=missingIncludeSystem --std=c99 $(CFLAGS) $(to_check)
+	cppcheck --force --enable=all --suppress=missingIncludeSystem $(common_cflags) $(to_check)
+
+defs:
+	gcc $(CFLAGS) -dM -E -x c /dev/null
 

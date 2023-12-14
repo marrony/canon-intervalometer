@@ -19,7 +19,6 @@ struct http_handler_t {
 #define CONTENT_TYPE_JSON "Content-Type: application/json\r\n"
 
 static const char *s_http_addr = "http://0.0.0.0:8001"; // HTTP port
-static char s_root_dir[PATH_MAX + 1] = {0};
 
 static void not_found(struct mg_connection *c) {
   mg_http_reply(c, 404, CONTENT_TYPE_TEXT, "Not Found");
@@ -131,14 +130,14 @@ static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
   size += mg_xprintf(out, ptr, "</select>");
 
   if (is_custom) {
-    format_exposure(state->exposure_ns, value, sizeof(value));
     size += mg_xprintf(
         out, ptr,
-        "<input type=\"text\" name=\"exposure-custom\" value=\"%s\" required "
+        "<input type=\"text\" name=\"exposure-custom\" value=\"%d\" required "
         "  hx-validate=\"true\" min=\"0\" inputmode=\"numeric\" "
         "  hx-post=\"/api/camera/state/exposure\" "
         "  hx-swap=\"outerHTML\" hx-target=\"#exposure\" %s />",
-        value, inputs_enabled(state) ? "" : "disabled");
+        (int32_t)(state->exposure_ns / SEC_TO_NS),
+        inputs_enabled(state) ? "" : "disabled");
   }
 
   size += mg_xprintf(out, ptr, "</div>");
@@ -391,7 +390,7 @@ static void handle_camera_take_picture(struct mg_connection *c,
 
 static void handle_get_assets(struct mg_connection *c,
                               struct mg_http_message *hm) {
-  struct mg_http_serve_opts opts = {.root_dir = s_root_dir};
+  struct mg_http_serve_opts opts = {.root_dir = "./web_root"};
   mg_http_serve_dir(c, hm, &opts);
 }
 
@@ -464,25 +463,16 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
 
     for (int32_t i = 0; i < http_handlers_len; i++) {
       if (mg_match(method_uri, mg_str(http_handlers[i].endpoint), NULL)) {
-        return http_handlers[i].handler(c, hm);
+        http_handlers[i].handler(c, hm);
+        return;
       }
     }
 
-    return not_found(c);
+    not_found(c);
   }
 }
 
-static void fix_root_dir(const char *argv) {
-  char temp_dir[PATH_MAX + 1] = {0};
-
-  realpath(argv, temp_dir);
-  snprintf(s_root_dir, PATH_MAX, "%s/web_root", dirname(temp_dir));
-}
-
 void *http_server_thread(void *data) {
-  const char **argv = (const char **)data;
-  fix_root_dir(argv[0]);
-
   struct mg_mgr mgr;
   mg_log_set(MG_LL_DEBUG);
   mg_mgr_init(&mgr);
