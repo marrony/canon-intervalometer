@@ -27,7 +27,6 @@ button {
 input {
   font-size: 25px;
   border: 0px;
-  width: 100%;
 }
 
 /* disable border of input when it's focused */
@@ -61,33 +60,24 @@ select {
 .content {
   display: flex;
   flex-direction: column;
-  row-gap: 30px;
+  row-gap: 10px;
 }
 
 .content .camera {
   display: flex;
-  flex-direction: row;
-  column-gap: 10px;
-  align-items: center;
+  flex-direction: column;
+  row-gap: 10px;
+  align-items: flex-start;
 }
 
 .content .inputs {
   display: flex;
-  flex-direction: column;
-  row-gap: 30px;
 }
 
-.content .inputs div {
+.content .inputs .exposure div {
   display: flex;
-  flex-direction: row;
-  column-gap: 2px;
-  align-items: center;
-  justify-content: flex-end;
-}
-
-.content .inputs div input {
-  /* text-align: end; */
-  /* padding-right: 15px; */
+  flex-direction: column;
+  row-gap: 10px;
 }
 
 .content .actions {

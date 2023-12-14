@@ -18,6 +18,7 @@
 // todo: use builtin camera timers
 static int64_t find_best_match(int64_t value);
 static void fill_exposures();
+static void copy_all_exposures();
 
 #ifdef __MACOS__
 extern __uint64_t __thread_selfid(void);
@@ -46,7 +47,8 @@ static struct {
         {
             .running = true,
             .delay_ns = 1 * SEC_TO_NS,
-            .exposure_ns = 5 * SEC_TO_NS,
+            .exposure_index = 0,
+            .exposure_ns = 31 * SEC_TO_NS,
             .interval_ns = 1 * SEC_TO_NS,
             .frames = 2,
             .frames_taken = 0,
@@ -435,6 +437,8 @@ void command_processor() {
   signal(SIGTERM, sig_handler);
   signal(SIGINT, sig_handler);
 
+  copy_all_exposures();
+
   while (g_state.state.running) {
     int32_t cmd = NO_OP;
     void *data = NULL;
@@ -458,72 +462,76 @@ void command_processor() {
   }
 }
 
-void set_exposure(const char *value_str) {
-  pthread_mutex_lock(&g_state.mutex);
+void set_exposure_custom(const char *value_str) {
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
 
-  int32_t exposure_int = 0;
-  float exposure_float = 0;
-
-  if (sscanf(value_str, "1/%d", &exposure_int) == 1) {
-    g_state.state.exposure_ns = SEC_TO_NS / exposure_int;
-  } else if (sscanf(value_str, "%f", &exposure_float) == 1) {
-    g_state.state.exposure_ns = exposure_float * SEC_TO_NS;
+  int exposure = 0;
+  if (sscanf(value_str, "%d", &exposure) == 1) {
+    g_state.state.exposure_ns = exposure * SEC_TO_NS;
   }
 
-  g_state.state.exposure_ns = find_best_match(g_state.state.exposure_ns);
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
+}
 
-  pthread_mutex_unlock(&g_state.mutex);
+void set_exposure_index(const char *index_str) {
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
+
+  int32_t index = 0;
+  if (sscanf(index_str, "%d", &index) == 1) {
+    g_state.state.exposure_index = index;
+  }
+
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
 void set_delay(const char *value_str) {
-  pthread_mutex_lock(&g_state.mutex);
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
 
   int32_t delay = 0;
   if (sscanf(value_str, "%d", &delay) == 1) {
     g_state.state.delay_ns = delay * SEC_TO_NS;
   }
 
-  pthread_mutex_unlock(&g_state.mutex);
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
 void set_interval(const char *value_str) {
-  pthread_mutex_lock(&g_state.mutex);
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
 
   int32_t interval = 0;
   if (sscanf(value_str, "%d", &interval) == 1) {
     g_state.state.interval_ns = interval * SEC_TO_NS;
   }
 
-  pthread_mutex_unlock(&g_state.mutex);
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
 void set_frames(const char *value_str) {
-  pthread_mutex_lock(&g_state.mutex);
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
 
   int32_t frames = 0;
   if (sscanf(value_str, "%d", &frames) == 1) {
     g_state.state.frames = frames;
   }
 
-  pthread_mutex_unlock(&g_state.mutex);
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
-void get_exposure(const struct camera_state_t *state, char *value_str,
-                  size_t size) {
-  int64_t exposure = state->exposure_ns;
+void get_exposure_at(int32_t index, char *value_str, size_t size) {
+  format_exposure(g_exposures[index].shutter_speed_ns, value_str, size);
+}
 
-  if (exposure < g_exposures_size) {
-    exposure = g_exposures[exposure].shutter_speed_ns;
-  }
+int32_t get_exposure_count() { return g_exposures_size; }
 
+void format_exposure(int64_t exposure, char *value_str, size_t size) {
   // if exposure >= 300ms use decimal format
   // otherwise use fractional format
   if (exposure >= 300 * MILLI_TO_NS) {
-    float seconds = exposure / (float)SEC_TO_NS;
-    snprintf(value_str, size, "%.1f", seconds);
+    int seconds = exposure / SEC_TO_NS;
+    snprintf(value_str, size, "%d\"", seconds);
   } else {
     int seconds = SEC_TO_NS / exposure;
-    snprintf(value_str, size, "1/%d", seconds);
+    snprintf(value_str, size, "1/%d\"", seconds);
   }
 }
 
@@ -646,4 +654,9 @@ static void fill_exposures() {
       }
     }
   }
+}
+
+static void copy_all_exposures() {
+  g_exposures_size = ALL_EXPOSURES_SIZE;
+  memcpy(g_exposures, g_all_exposures, sizeof(g_all_exposures));
 }

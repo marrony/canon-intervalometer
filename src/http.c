@@ -93,7 +93,7 @@ static size_t render_input(mg_pfn_t out, void *ptr, va_list *ap) {
 
   return mg_xprintf(out, ptr,
                     "<input type=\"number\" name=\"%s\" value=\"%d\" required "
-                    "  hx-validate=\"true\" min=\"0\" inputmode=\"decimal\" "
+                    "  hx-validate=\"true\" min=\"0\" inputmode=\"numeric\" "
                     "  hx-post=\"/api/camera/state/%s\" "
                     "  hx-swap=\"outerHTML\" %s />",
                     input->id, input->value, input->id,
@@ -106,15 +106,44 @@ static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
 
   char value[32] = {0};
 
-  get_exposure(state, value, sizeof(value));
-
-  return mg_xprintf(
+  size_t size = 0;
+  size += mg_xprintf(out, ptr, "<div id=\"exposure\">");
+  size += mg_xprintf(
       out, ptr,
-      "<input type=\"text\" name=\"exposure\" required hx-validate=\"true\" "
-      "  pattern=\"\\d{1,3}(\\.\\d)?|1/\\d{1,5}\" value=\"%s\" "
-      "  hx-post=\"/api/camera/state/exposure\" "
-      "  hx-swap=\"outerHTML\" %s />",
-      value, inputs_enabled(state) ? "" : "disabled");
+      "<select name=\"exposure\" hx-post=\"/api/camera/state/exposure\" "
+      "  hx-swap=\"outerHTML\" hx-target=\"#exposure\">");
+
+  int32_t exposure_count = get_exposure_count();
+
+  bool is_custom = state->exposure_index >= exposure_count;
+
+  size += mg_xprintf(out, ptr, "<option value=\"%d\" %s>Custom</option>",
+                     exposure_count, is_custom ? "selected" : "");
+
+  for (int32_t i = 0; i < exposure_count; i++) {
+    bool is_selected = i == state->exposure_index;
+
+    get_exposure_at(i, value, sizeof(value));
+    size += mg_xprintf(out, ptr, "<option value=\"%d\" %s>%s</option>", i,
+                       is_selected ? "selected" : "", value);
+  }
+
+  size += mg_xprintf(out, ptr, "</select>");
+
+  if (is_custom) {
+    format_exposure(state->exposure_ns, value, sizeof(value));
+    size += mg_xprintf(
+        out, ptr,
+        "<input type=\"text\" name=\"exposure-custom\" value=\"%s\" required "
+        "  hx-validate=\"true\" min=\"0\" inputmode=\"numeric\" "
+        "  hx-post=\"/api/camera/state/exposure\" "
+        "  hx-swap=\"outerHTML\" hx-target=\"#exposure\" %s />",
+        value, inputs_enabled(state) ? "" : "disabled");
+  }
+
+  size += mg_xprintf(out, ptr, "</div>");
+
+  return size;
 }
 
 static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -261,8 +290,17 @@ static void render_input_response(struct mg_connection *c, const char *variable,
 static void handle_input_exposure(struct mg_connection *c,
                                   struct mg_http_message *hm) {
   char buf[32];
-  if (mg_http_get_var(&hm->body, "exposure", buf, sizeof(buf)) > 0)
-    set_exposure(buf);
+  if (mg_http_get_var(&hm->body, "exposure", buf, sizeof(buf)) > 0) {
+    set_exposure_index(buf);
+  }
+
+  MG_DEBUG(("Exposure done"));
+
+  if (mg_http_get_var(&hm->body, "exposure-custom", buf, sizeof(buf)) > 0) {
+    set_exposure_custom(buf);
+  }
+
+  MG_DEBUG(("Exposure done"));
 
   struct camera_state_t state;
   get_copy_state(&state);
