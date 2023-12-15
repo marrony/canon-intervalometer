@@ -425,7 +425,7 @@ static void take_picture_command(void *data) {
   if (!g_state.state.initialized || !g_state.state.connected)
     return;
 
-  if (g_state.state.exposure_ns < g_exposures_size) {
+  if (g_state.state.exposure_index < g_exposures_size) {
     // using native time
     press_shutter(NULL);
     release_shutter(NULL);
@@ -460,8 +460,8 @@ static void start_shooting_command(void *data) {
   g_state.state.frames_taken = 0;
   g_state.state.shooting = true;
 
-  if (g_state.state.exposure_ns < g_exposures_size) {
-    set_shutter_speed(g_exposures[g_state.state.exposure_ns].shutter_param);
+  if (g_state.state.exposure_index < g_exposures_size) {
+    set_shutter_speed(g_exposures[g_state.state.exposure_index].shutter_param);
   } else {
     set_bulb_mode();
   }
