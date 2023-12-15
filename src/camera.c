@@ -340,9 +340,17 @@ static void set_shutter_speed(EdsUInt32 shutter_speed) {
   }
 }
 
-static void set_bulb_mode(void) {
-  MG_DEBUG(("Setting camera to Bulb mode"));
-  set_shutter_speed(0x0C);
+static void update_shutter_speed(void) {
+  if (!g_state.state.initialized || !g_state.state.connected) {
+    return;
+  }
+
+  if (g_state.state.exposure_index < g_exposures_size) {
+    set_shutter_speed(g_exposures[g_state.state.exposure_index].shutter_param);
+  } else {
+		MG_DEBUG(("Setting camera to Bulb mode"));
+		set_shutter_speed(0x0C);
+  }
 }
 
 static void lock_ui(void) {
@@ -372,9 +380,9 @@ static void connect_command(void *data) {
   MG_DEBUG(("Connecting to %s", g_state.state.description));
 
   if (EdsOpenSession(g_state.camera) == EDS_ERR_OK) {
-    set_bulb_mode();
-    lock_ui();
     fill_exposures();
+    lock_ui();
+    update_shutter_speed();
     g_state.state.connected = true;
   } else {
     MG_DEBUG(("Failed to connect to the camera"));
@@ -460,11 +468,7 @@ static void start_shooting_command(void *data) {
   g_state.state.frames_taken = 0;
   g_state.state.shooting = true;
 
-  if (g_state.state.exposure_index < g_exposures_size) {
-    set_shutter_speed(g_exposures[g_state.state.exposure_index].shutter_param);
-  } else {
-    set_bulb_mode();
-  }
+  update_shutter_speed();
 
   async_queue_post(&g_main_queue, INITIAL_DELAY, NULL, /*async*/ true);
 }
@@ -553,6 +557,8 @@ void set_exposure_index(const char *index_str) {
   int32_t index = 0;
   if (sscanf(index_str, "%d", &index) == 1) {
     g_state.state.exposure_index = index;
+
+    update_shutter_speed();
   }
 
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
