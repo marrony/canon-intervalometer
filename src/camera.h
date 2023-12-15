@@ -26,6 +26,7 @@ enum command_type {
 struct camera_state_t {
   bool running;
   int64_t delay_ns;
+  int32_t iso_index;
   int32_t exposure_index;
   int64_t exposure_ns;
   int64_t interval_ns;
@@ -44,6 +45,7 @@ void command_processor(void);
 void get_copy_state(struct camera_state_t *state);
 bool is_running(void);
 
+void set_iso_index(const char *index_str);
 void set_exposure_index(const char *index_str);
 void set_exposure_custom(const char *value_str);
 void set_delay(const char *value_str);
@@ -51,7 +53,9 @@ void set_interval(const char *value_str);
 void set_frames(const char *value_str);
 
 void get_exposure_at(int32_t index, char *value_str, size_t size);
-void format_exposure(int64_t value, char *value_str, size_t size);
 int32_t get_exposure_count(void);
+
+void get_iso_at(int32_t index, char *value_str, size_t size);
+int32_t get_iso_count(void);
 
 #endif // CAMERA_H

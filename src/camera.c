@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "EDSDKTypes.h"
 #include "camera.h"
 #include "mongoose.h"
 #include "queue.h"
@@ -17,7 +18,9 @@
 
 // todo: use builtin camera timers
 static void fill_exposures(void);
+static void fill_iso_speeds(void);
 static void copy_all_exposures(void);
+static void copy_all_isos(void);
 
 #ifdef __MACOS__
 extern __uint64_t __thread_selfid(void);
@@ -46,6 +49,7 @@ static struct {
         {
             .running = true,
             .delay_ns = 1 * SEC_TO_NS,
+            .iso_index = 0,
             .exposure_index = 0,
             .exposure_ns = 31 * SEC_TO_NS,
             .interval_ns = 1 * SEC_TO_NS,
@@ -68,6 +72,11 @@ struct sync_queue_t g_main_queue = {
 struct exposure_t {
   int64_t shutter_speed_ns;
   EdsUInt32 shutter_param;
+};
+
+struct iso_t {
+  const char *iso_description;
+  EdsUInt32 iso_param;
 };
 
 static const struct exposure_t g_all_exposures[] = {
@@ -143,10 +152,57 @@ static const struct exposure_t g_all_exposures[] = {
     {.shutter_speed_ns = SEC_TO_NS / 16000, .shutter_param = 0xA8},
 };
 
-#define ALL_EXPOSURES_SIZE (sizeof(g_all_exposures) / sizeof(struct exposure_t))
+static const struct iso_t g_all_isos[] = {
+    {.iso_description = "auto", .iso_param = 0x0},
+    {.iso_description = "ISO 6", .iso_param = 0x28},
+    {.iso_description = "ISO 12", .iso_param = 0x30},
+    {.iso_description = "ISO 25", .iso_param = 0x38},
+    {.iso_description = "ISO 50", .iso_param = 0x40},
+    {.iso_description = "ISO 100", .iso_param = 0x48},
+    {.iso_description = "ISO 125", .iso_param = 0x4b},
+    {.iso_description = "ISO 160", .iso_param = 0x4d},
+    {.iso_description = "ISO 200", .iso_param = 0x50},
+    {.iso_description = "ISO 250", .iso_param = 0x53},
+    {.iso_description = "ISO 320", .iso_param = 0x55},
+    {.iso_description = "ISO 400", .iso_param = 0x56},
+    {.iso_description = "ISO 500", .iso_param = 0x5b},
+    {.iso_description = "ISO 640", .iso_param = 0x5d},
+    {.iso_description = "ISO 800", .iso_param = 0x60},
+    {.iso_description = "ISO 1000", .iso_param = 0x63},
+    {.iso_description = "ISO 1250", .iso_param = 0x65},
+    {.iso_description = "ISO 1600", .iso_param = 0x68},
+    {.iso_description = "ISO 2000", .iso_param = 0x6b},
+    {.iso_description = "ISO 2500", .iso_param = 0x6d},
+    {.iso_description = "ISO 3200", .iso_param = 0x70},
+    {.iso_description = "ISO 4000", .iso_param = 0x73},
+    {.iso_description = "ISO 5000", .iso_param = 0x75},
+    {.iso_description = "ISO 6400", .iso_param = 0x78},
+    {.iso_description = "ISO 8000", .iso_param = 0x07b},
+    {.iso_description = "ISO 10000", .iso_param = 0x7d},
+    {.iso_description = "ISO 12800", .iso_param = 0x80},
+    {.iso_description = "ISO 16000", .iso_param = 0x83},
+    {.iso_description = "ISO 20000", .iso_param = 0x85},
+    {.iso_description = "ISO 25600", .iso_param = 0x88},
+    {.iso_description = "ISO 32000", .iso_param = 0x8b},
+    {.iso_description = "ISO 40000", .iso_param = 0x8d},
+    {.iso_description = "ISO 51200", .iso_param = 0x90},
+    {.iso_description = "ISO 64000", .iso_param = 0x3},
+    {.iso_description = "ISO 80000", .iso_param = 0x95},
+    {.iso_description = "ISO 102400", .iso_param = 0x98},
+    {.iso_description = "ISO 204800", .iso_param = 0xa0},
+    {.iso_description = "ISO 409600", .iso_param = 0xa8},
+    {.iso_description = "ISO 819200", .iso_param = 0xb0},
+};
+
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
+#define ALL_EXPOSURES_SIZE ARRAY_SIZE(g_all_exposures)
+#define ALL_ISOS_SIZE ARRAY_SIZE(g_all_isos)
 
 static struct exposure_t g_exposures[ALL_EXPOSURES_SIZE] = {0};
 static int g_exposures_size = 0;
+
+static struct iso_t g_isos[ALL_ISOS_SIZE] = {0};
+static int g_isos_size = 0;
 
 void get_copy_state(struct camera_state_t *state) {
   assert(pthread_mutex_lock(&g_state.mutex) == 0);
@@ -340,6 +396,17 @@ static void set_shutter_speed(EdsUInt32 shutter_speed) {
   }
 }
 
+static void set_iso_speed(EdsUInt32 iso_speed) {
+  MG_DEBUG(("Setting iso speed = %x", iso_speed));
+
+  EdsError err = EdsSetPropertyData(g_state.camera, kEdsPropID_ISOSpeed, 0,
+                                    sizeof(EdsUInt32), &iso_speed);
+
+  if (err != EDS_ERR_OK) {
+    MG_DEBUG(("Error setting iso speed"));
+  }
+}
+
 static void update_shutter_speed(void) {
   if (!g_state.state.initialized || !g_state.state.connected) {
     return;
@@ -348,8 +415,21 @@ static void update_shutter_speed(void) {
   if (g_state.state.exposure_index < g_exposures_size) {
     set_shutter_speed(g_exposures[g_state.state.exposure_index].shutter_param);
   } else {
-		MG_DEBUG(("Setting camera to Bulb mode"));
-		set_shutter_speed(0x0C);
+    MG_DEBUG(("Setting camera to Bulb mode"));
+    set_shutter_speed(0x0C);
+  }
+}
+
+static void update_iso_speed(void) {
+  if (!g_state.state.initialized || !g_state.state.connected) {
+    return;
+  }
+
+  if (g_state.state.iso_index < g_isos_size) {
+    set_iso_speed(g_isos[g_state.state.iso_index].iso_param);
+  } else {
+    MG_DEBUG(("Setting camera to ISO auto"));
+    set_iso_speed(0x0);
   }
 }
 
@@ -380,10 +460,12 @@ static void connect_command(void *data) {
   MG_DEBUG(("Connecting to %s", g_state.state.description));
 
   if (EdsOpenSession(g_state.camera) == EDS_ERR_OK) {
+    g_state.state.connected = true;
     fill_exposures();
+    fill_iso_speeds();
     lock_ui();
     update_shutter_speed();
-    g_state.state.connected = true;
+    update_iso_speed();
   } else {
     MG_DEBUG(("Failed to connect to the camera"));
     // something bad happened, deinitialize and start again
@@ -469,6 +551,7 @@ static void start_shooting_command(void *data) {
   g_state.state.shooting = true;
 
   update_shutter_speed();
+  update_iso_speed();
 
   async_queue_post(&g_main_queue, INITIAL_DELAY, NULL, /*async*/ true);
 }
@@ -516,6 +599,7 @@ void command_processor(void) {
   signal(SIGINT, sig_handler);
 
   copy_all_exposures();
+  copy_all_isos();
 
   while (g_state.state.running) {
     int32_t cmd = NO_OP;
@@ -564,6 +648,19 @@ void set_exposure_index(const char *index_str) {
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
+void set_iso_index(const char *index_str) {
+  assert(pthread_mutex_lock(&g_state.mutex) == 0);
+
+  int32_t index = 0;
+  if (sscanf(index_str, "%d", &index) == 1) {
+    g_state.state.iso_index = index;
+
+    update_iso_speed();
+  }
+
+  assert(pthread_mutex_unlock(&g_state.mutex) == 0);
+}
+
 void set_delay(const char *value_str) {
   assert(pthread_mutex_lock(&g_state.mutex) == 0);
 
@@ -597,12 +694,6 @@ void set_frames(const char *value_str) {
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
-void get_exposure_at(int32_t index, char *value_str, size_t size) {
-  format_exposure(g_exposures[index].shutter_speed_ns, value_str, size);
-}
-
-int32_t get_exposure_count(void) { return g_exposures_size; }
-
 void format_exposure(int64_t exposure, char *value_str, size_t size) {
   // if exposure >= 300ms use decimal format
   // otherwise use fractional format
@@ -614,6 +705,18 @@ void format_exposure(int64_t exposure, char *value_str, size_t size) {
     snprintf(value_str, size, "1/%d\"", seconds);
   }
 }
+
+void get_exposure_at(int32_t index, char *value_str, size_t size) {
+  format_exposure(g_exposures[index].shutter_speed_ns, value_str, size);
+}
+
+int32_t get_exposure_count(void) { return g_exposures_size; }
+
+void get_iso_at(int32_t index, char *value_str, size_t size) {
+  strncpy(value_str, g_isos[index].iso_description, size);
+}
+
+int32_t get_iso_count(void) { return g_isos_size; }
 
 static void fill_exposures(void) {
   g_exposures_size = 0;
@@ -636,7 +739,32 @@ static void fill_exposures(void) {
   }
 }
 
+static void fill_iso_speeds(void) {
+  g_isos_size = 0;
+
+  EdsPropertyDesc property_desc = {0};
+  if (EdsGetPropertyDesc(g_state.camera, kEdsPropID_ISOSpeed, &property_desc) ==
+      EDS_ERR_OK) {
+
+    for (int i = 0; i < property_desc.numElements; i++) {
+      EdsInt32 key = property_desc.propDesc[i];
+
+      for (int j = 0; j < ALL_ISOS_SIZE; j++) {
+        if (g_all_isos[j].iso_param == key) {
+          memcpy(&g_isos[g_isos_size++], &g_all_isos[j], sizeof(struct iso_t));
+          break;
+        }
+      }
+    }
+  }
+}
+
 static void copy_all_exposures(void) {
   g_exposures_size = ALL_EXPOSURES_SIZE;
   memcpy(g_exposures, g_all_exposures, sizeof(g_all_exposures));
+}
+
+static void copy_all_isos(void) {
+  g_isos_size = ALL_ISOS_SIZE;
+  memcpy(g_isos, g_all_isos, sizeof(g_all_isos));
 }

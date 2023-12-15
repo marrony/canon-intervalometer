@@ -145,6 +145,33 @@ static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
   return size;
 }
 
+static size_t render_iso(mg_pfn_t out, void *ptr, va_list *ap) {
+  const struct camera_state_t *state =
+      va_arg(*ap, const struct camera_state_t *);
+
+  char value[32] = {0};
+
+  size_t size = 0;
+  size += mg_xprintf(
+      out, ptr,
+      "<select id=\"iso\" name=\"iso\" hx-post=\"/api/camera/state/iso\" "
+      "  hx-swap=\"outerHTML\" hx-target=\"#iso\">");
+
+  int32_t iso_count = get_iso_count();
+
+  for (int32_t i = 0; i < iso_count; i++) {
+    bool is_selected = i == state->iso_index;
+
+    get_iso_at(i, value, sizeof(value));
+    size += mg_xprintf(out, ptr, "<option value=\"%d\" %s>%s</option>", i,
+                       is_selected ? "selected" : "", value);
+  }
+
+  size += mg_xprintf(out, ptr, "</select>");
+
+  return size;
+}
+
 static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
   const struct camera_state_t *state =
       va_arg(*ap, const struct camera_state_t *);
@@ -185,9 +212,13 @@ static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
                     "    <legend>Frames</legend>"
                     "    <div class=\"frames\">%M</div>"
                     "  </fieldset>"
+                    "  <fieldset>"
+                    "    <legend>ISO</legend>"
+                    "    <div class=\"iso\">%M</div>"
+                    "  </fieldset>"
                     "</div>",
                     render_input, &delay, render_exposure, state, render_input,
-                    &interval, render_input, &frames);
+                    &interval, render_input, &frames, render_iso, &state);
 }
 
 static size_t render_actions_content(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -293,17 +324,25 @@ static void handle_input_exposure(struct mg_connection *c,
     set_exposure_index(buf);
   }
 
-  MG_DEBUG(("Exposure done"));
-
   if (mg_http_get_var(&hm->body, "exposure-custom", buf, sizeof(buf)) > 0) {
     set_exposure_custom(buf);
   }
 
-  MG_DEBUG(("Exposure done"));
-
   struct camera_state_t state;
   get_copy_state(&state);
   mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_exposure, &state);
+}
+
+static void handle_input_iso(struct mg_connection *c,
+                             struct mg_http_message *hm) {
+  char buf[32];
+  if (mg_http_get_var(&hm->body, "iso", buf, sizeof(buf)) > 0) {
+    set_iso_index(buf);
+  }
+
+  struct camera_state_t state;
+  get_copy_state(&state);
+  mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_iso, &state);
 }
 
 static void handle_input_delay(struct mg_connection *c,
@@ -398,6 +437,10 @@ static struct http_handler_t http_handlers[] = {
     {
         .endpoint = "POST /api/camera/state/delay",
         .handler = handle_input_delay,
+    },
+    {
+        .endpoint = "POST /api/camera/state/iso",
+        .handler = handle_input_iso,
     },
     {
         .endpoint = "POST /api/camera/state/exposure",

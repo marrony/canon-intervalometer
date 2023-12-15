@@ -36,7 +36,8 @@ input:focus {
 }
 
 /* change color of fieldset when input is focused */
-fieldset:has(input:focus) {
+fieldset:has(input:focus),
+fieldset:has(*:hover) {
   border: 1px solid blue;
 }
 
@@ -75,6 +76,12 @@ select {
 }
 
 .content .inputs .exposure div {
+  display: flex;
+  flex-direction: column;
+  row-gap: 10px;
+}
+
+.content .inputs .iso {
   display: flex;
   flex-direction: column;
   row-gap: 10px;
