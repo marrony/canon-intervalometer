@@ -71,6 +71,14 @@ select {
   align-items: flex-start;
 }
 
+.content .camera fieldset {
+  align-self: stretch;
+}
+
+.content .camera button {
+  align-self: center;
+}
+
 .content .inputs {
   display: flex;
 }
