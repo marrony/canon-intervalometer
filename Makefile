@@ -32,10 +32,12 @@ OBJS := $(patsubst src/%.c, bin/%.o, $(SRCS))
 
 .PHONY: all sync cppcheck update-mongoose defs
 
-all: bin bin/web_root/assets bin/main $(DEPS)
+all: bin bin/web_root/assets bin/run-canon.sh bin/canon-intervalometer $(DEPS)
 
-bin/main: $(OBJS)
-	cp run.sh bin/run.sh
+bin/run-canon.sh: run-canon.sh bin/canon-intervalometer Makefile
+	cp run-canon.sh bin/run-canon.sh
+
+bin/canon-intervalometer: $(OBJS)
 	gcc -o $@ $^ $(LDFLAGS)
 
 bin/%.o: src/%.c $(HDRS) Makefile

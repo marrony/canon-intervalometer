@@ -426,10 +426,11 @@ static void handle_camera_take_picture(struct mg_connection *c,
   render_state_response(c, false);
 }
 
+static struct mg_http_serve_opts g_serve_opts = {0};
+
 static void handle_get_assets(struct mg_connection *c,
                               struct mg_http_message *hm) {
-  struct mg_http_serve_opts opts = {.root_dir = "./web_root"};
-  mg_http_serve_dir(c, hm, &opts);
+  mg_http_serve_dir(c, hm, &g_serve_opts);
 }
 
 static struct http_handler_t http_handlers[] = {
@@ -514,7 +515,9 @@ static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
   }
 }
 
-void *http_server_thread(void *data) {
+void *http_server_thread(void *web_root) {
+  g_serve_opts.root_dir = web_root;
+
   struct mg_mgr mgr;
   mg_log_set(MG_LL_DEBUG);
   mg_mgr_init(&mgr);
