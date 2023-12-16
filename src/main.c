@@ -1,4 +1,7 @@
 #include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "camera.h"
 #include "http.h"

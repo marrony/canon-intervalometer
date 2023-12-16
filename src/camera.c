@@ -21,6 +21,7 @@ static void fill_exposures(void);
 static void fill_iso_speeds(void);
 static void copy_all_exposures(void);
 static void copy_all_isos(void);
+static void format_exposure(int64_t exposure, char *value_str, size_t size);
 
 #ifdef __MACOS__
 extern __uint64_t __thread_selfid(void);
@@ -73,6 +74,7 @@ struct iso_t {
   EdsUInt32 iso_param;
 };
 
+// todo: add description field
 static const struct exposure_t g_all_exposures[] = {
     // {.shutter_speed_ns = 0xFFFFFFFFFFFFFF, .shutter_speed = 0x0C},
     {.shutter_speed_ns = 30000000000ull, .shutter_param = 0x10},
@@ -211,7 +213,7 @@ bool is_running(void) {
   return ret;
 }
 
-static int nssleep(int64_t timer_ns) {
+static bool nssleep(int64_t timer_ns) {
   struct timespec ts = {
       .tv_sec = timer_ns / SEC_TO_NS,
       .tv_nsec = timer_ns % SEC_TO_NS,
@@ -220,13 +222,14 @@ static int nssleep(int64_t timer_ns) {
 
   while (nanosleep(&ts, &rem) < 0) {
     if (errno != EINTR)
-      return -1;
+      return false;
     ts = rem;
   }
 
-  return 0;
+  return true;
 }
 
+#ifdef CAMERA_EVENTS
 static EdsError EDSCALLBACK handle_object_event(EdsObjectEvent event,
                                                 EdsBaseRef object_ref,
                                                 EdsVoid *data) {
@@ -257,6 +260,9 @@ static void attach_camera_callbacks(void) {
   EdsSetCameraStateEventHandler(g_state.camera, kEdsStateEvent_All,
                                 handle_state_event, NULL);
 }
+#else
+static void attach_camera_callbacks(void) {}
+#endif
 
 static bool detect_connected_camera(void) {
   EdsCameraListRef camera_list = NULL;
@@ -388,8 +394,6 @@ static void initialize_command(void *data) {
 }
 
 static void set_shutter_speed(EdsUInt32 shutter_speed) {
-  MG_DEBUG(("Setting shutter speed = %x", shutter_speed));
-
   EdsError err = EdsSetPropertyData(g_state.camera, kEdsPropID_Tv, 0,
                                     sizeof(EdsUInt32), &shutter_speed);
 
@@ -399,8 +403,6 @@ static void set_shutter_speed(EdsUInt32 shutter_speed) {
 }
 
 static void set_iso_speed(EdsUInt32 iso_speed) {
-  MG_DEBUG(("Setting iso speed = %x", iso_speed));
-
   EdsError err = EdsSetPropertyData(g_state.camera, kEdsPropID_ISOSpeed, 0,
                                     sizeof(EdsUInt32), &iso_speed);
 
@@ -415,6 +417,9 @@ static void update_shutter_speed(void) {
   }
 
   if (g_state.state.exposure_index < g_exposures_size) {
+    char value[32];
+    format_exposure(g_exposures[g_state.state.exposure_index].shutter_speed_ns, value, sizeof(value));
+    MG_DEBUG(("Setting shutter speed = %s", value));
     set_shutter_speed(g_exposures[g_state.state.exposure_index].shutter_param);
   } else {
     MG_DEBUG(("Setting camera to Bulb mode"));
@@ -428,6 +433,7 @@ static void update_iso_speed(void) {
   }
 
   if (g_state.state.iso_index < g_isos_size) {
+    MG_DEBUG(("Setting to ISO = %s", g_isos[g_state.state.iso_index].iso_description));
     set_iso_speed(g_isos[g_state.state.iso_index].iso_param);
   } else {
     MG_DEBUG(("Setting camera to ISO auto"));
@@ -505,7 +511,7 @@ static void initial_delay_command(void *data) {
 }
 
 static void interval_delay_command(void *data) {
-  if (nssleep(g_state.state.interval_ns) == 0) {
+  if (nssleep(g_state.state.interval_ns)) {
     async_queue_post(&g_main_queue, TAKE_PICTURE, NULL, /*async*/ true);
   } else {
     MG_DEBUG(("Stop shooting"));
@@ -530,7 +536,7 @@ static void take_picture_command(void *data) {
 
     if (success) {
       g_state.state.shooting =
-          nssleep(g_state.state.exposure_ns - delay_average_ns) == 0;
+          nssleep(g_state.state.exposure_ns - delay_average_ns);
     }
 
     success = release_shutter(&end_ns);
@@ -693,7 +699,7 @@ void set_frames(const char *value_str) {
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
-void format_exposure(int64_t exposure, char *value_str, size_t size) {
+static void format_exposure(int64_t exposure, char *value_str, size_t size) {
   // if exposure >= 300ms use decimal format
   // otherwise use fractional format
   if (exposure >= 300 * MILLI_TO_NS) {
@@ -735,6 +741,8 @@ static void fill_exposures(void) {
         }
       }
     }
+  } else {
+    MG_DEBUG(("Error getting shutter speeds"));
   }
 }
 
@@ -755,6 +763,8 @@ static void fill_iso_speeds(void) {
         }
       }
     }
+  } else {
+    MG_DEBUG(("Error getting iso speeds"));
   }
 }
 

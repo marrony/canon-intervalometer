@@ -1,4 +1,3 @@
-#include <libgen.h>
 #include <stdio.h>
 
 #include "camera.h"

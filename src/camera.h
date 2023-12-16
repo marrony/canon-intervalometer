@@ -5,6 +5,10 @@
 #include <stdbool.h>
 // clang-format: on
 
+#ifndef PATH_MAX
+#define PATH_MAX 256
+#endif
+
 #include "queue.h"
 
 #include <EDSDK.h>
