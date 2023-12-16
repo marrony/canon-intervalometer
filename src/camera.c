@@ -10,13 +10,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "EDSDKErrors.h"
 #include "EDSDKTypes.h"
 #include "camera.h"
 #include "mongoose.h"
 #include "queue.h"
 #include "timer.h"
 
-// todo: use builtin camera timers
 static void fill_exposures(void);
 static void fill_iso_speeds(void);
 static void copy_all_exposures(void);
@@ -28,13 +28,7 @@ extern __uint64_t __thread_selfid(void);
 
 static int64_t get_system_nanos(void) {
   struct timespec ts = {0, 0};
-#if defined(CLOCK_MONOTONIC_RAW)
-  clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
-#elif defined(CLOCK_MONOTONIC)
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-#else
-  clock_gettime(CLOCK_REALTIME, &ts);
-#endif
+  timespec_get(&ts, TIME_UTC);
   return (int64_t)ts.tv_sec * SEC_TO_NS + (int64_t)ts.tv_nsec;
 }
 
@@ -153,7 +147,7 @@ static const struct exposure_t g_all_exposures[] = {
 };
 
 static const struct iso_t g_all_isos[] = {
-    {.iso_description = "auto", .iso_param = 0x0},
+    {.iso_description = "Auto", .iso_param = 0x0},
     {.iso_description = "ISO 6", .iso_param = 0x28},
     {.iso_description = "ISO 12", .iso_param = 0x30},
     {.iso_description = "ISO 25", .iso_param = 0x38},
@@ -217,11 +211,10 @@ bool is_running(void) {
   return ret;
 }
 
-#if 0
 static int nssleep(int64_t timer_ns) {
   struct timespec ts = {
-    .tv_sec = timer_ns / NANOS,
-    .tv_nsec = timer_ns % NANOS
+      .tv_sec = timer_ns / SEC_TO_NS,
+      .tv_nsec = timer_ns % SEC_TO_NS,
   };
   struct timespec rem = {0, 0};
 
@@ -233,7 +226,37 @@ static int nssleep(int64_t timer_ns) {
 
   return 0;
 }
-#endif
+
+static EdsError EDSCALLBACK handle_object_event(EdsObjectEvent event,
+                                                EdsBaseRef object_ref,
+                                                EdsVoid *data) {
+  MG_DEBUG(("Event = %u", event));
+  return EdsRelease(object_ref);
+}
+
+static EdsError EDSCALLBACK handle_property_event(EdsPropertyEvent event,
+                                                  EdsUInt32 property_id,
+                                                  EdsUInt32 param,
+                                                  EdsVoid *data) {
+  MG_DEBUG(
+      ("Event = %u, Property = %u, Param = %u", event, property_id, param));
+  return EDS_ERR_OK;
+}
+
+static EdsError EDSCALLBACK handle_state_event(EdsStateEvent event,
+                                               EdsUInt32 param, EdsVoid *data) {
+  MG_DEBUG(("Event = %u, Param = %u", event, param));
+  return EDS_ERR_OK;
+}
+
+static void attach_camera_callbacks(void) {
+  EdsSetObjectEventHandler(g_state.camera, kEdsObjectEvent_All,
+                           handle_object_event, NULL);
+  EdsSetPropertyEventHandler(g_state.camera, kEdsPropertyEvent_All,
+                             handle_property_event, NULL);
+  EdsSetCameraStateEventHandler(g_state.camera, kEdsStateEvent_All,
+                                handle_state_event, NULL);
+}
 
 static bool detect_connected_camera(void) {
   EdsCameraListRef camera_list = NULL;
@@ -284,34 +307,6 @@ static bool detect_connected_camera(void) {
   return true;
 }
 
-#if 0
-EdsError EDSCALLBACK handleObjectEvent(EdsObjectEvent event, EdsBaseRef object,
-                                       EdsVoid *context) {
-  EdsError err = EDS_ERR_OK;
-
-  // Object must be released if(object)
-  EdsRelease(object);
-  //_syncObject->unlock();
-  return err;
-}
-
-EdsError EDSCALLBACK handlePropertyEvent(EdsUInt32 inEvent,
-                                         EdsUInt32 inPropertyID,
-                                         EdsUInt32 inParam,
-                                         EdsVoid *inContext) {
-  EdsError err = EDS_ERR_OK;
-  // do something
-  return err;
-}
-
-EdsError EDSCALLBACK handleSateEvent(EdsStateEvent event, EdsUInt32 parameter,
-                                     EdsVoid *context) {
-  EdsError err = EDS_ERR_OK;
-  // do something
-  return err;
-}
-#endif
-
 static bool press_shutter(int64_t *ts) {
   int64_t start = get_system_nanos();
   EdsError err =
@@ -356,6 +351,11 @@ static bool release_shutter(int64_t *ts) {
 static void no_op_command(void *data) {}
 
 static void deinitialize_command(void *data) {
+  if (g_state.camera != NULL) {
+    EdsRelease(g_state.camera);
+    g_state.camera = NULL;
+  }
+
   if (g_state.state.initialized) {
     EdsTerminateSDK();
   }
@@ -383,6 +383,8 @@ static void initialize_command(void *data) {
     MG_DEBUG(("Error detecting camera"));
     deinitialize_command(NULL);
   }
+
+  attach_camera_callbacks();
 }
 
 static void set_shutter_speed(EdsUInt32 shutter_speed) {
@@ -493,7 +495,7 @@ static void disconnect_command(void *data) {
 
 static void initial_delay_command(void *data) {
   if (g_state.state.delay_ns > 0) {
-    if (!start_timer_ns(g_state.state.delay_ns)) {
+    if (!nssleep(g_state.state.delay_ns)) {
       g_state.state.shooting = false;
       return;
     }
@@ -503,7 +505,7 @@ static void initial_delay_command(void *data) {
 }
 
 static void interval_delay_command(void *data) {
-  if (start_timer_ns(g_state.state.interval_ns)) {
+  if (nssleep(g_state.state.interval_ns) == 0) {
     async_queue_post(&g_main_queue, TAKE_PICTURE, NULL, /*async*/ true);
   } else {
     MG_DEBUG(("Stop shooting"));
@@ -528,7 +530,7 @@ static void take_picture_command(void *data) {
 
     if (success) {
       g_state.state.shooting =
-          start_timer_ns(g_state.state.exposure_ns - delay_average_ns);
+          nssleep(g_state.state.exposure_ns - delay_average_ns) == 0;
     }
 
     success = release_shutter(&end_ns);
@@ -557,9 +559,6 @@ static void start_shooting_command(void *data) {
 }
 
 static void stop_shooting_command(void *data) {
-  // fixme: this won't work because this thread is already
-  // locked on start_timer_ns()
-  abort_timer();
   g_state.state.shooting = false;
 }
 

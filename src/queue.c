@@ -25,6 +25,16 @@ int32_t queue_enqueue(struct queue_t *b, int32_t cmd, void *data) {
   return nextin;
 }
 
+static void adjust_timer_ns(struct timespec *ts, int64_t timer_ns) {
+  clock_gettime(CLOCK_REALTIME, ts);
+
+  ts->tv_sec += timer_ns / SEC_TO_NS;
+  ts->tv_nsec += timer_ns % SEC_TO_NS;
+
+  ts->tv_sec += ts->tv_nsec / SEC_TO_NS;
+  ts->tv_nsec = ts->tv_nsec % SEC_TO_NS;
+}
+
 int32_t queue_dequeue(struct queue_t *b, int32_t *cmd, void **data,
                       int64_t timer_ns) {
   assert(pthread_mutex_lock(&b->mutex) == 0);

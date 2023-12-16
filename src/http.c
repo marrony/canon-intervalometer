@@ -410,12 +410,6 @@ static void handle_camera_start_shoot(struct mg_connection *c,
 
 static void handle_camera_stop_shoot(struct mg_connection *c,
                                      struct mg_http_message *hm) {
-  // fixme: need to abort timer in this thread because the main
-  // thread is locked on start_timer_ns() so it will not pull
-  // another command from the queue until the timer times out.
-  // fixme: abort only if timers is not native?
-  abort_timer();
-
   async_queue_post(&g_main_queue, STOP_SHOOTING, NULL, /*async*/ true);
   render_state_response(c, false);
 }
