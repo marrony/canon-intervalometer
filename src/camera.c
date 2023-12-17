@@ -10,8 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "EDSDKErrors.h"
-#include "EDSDKTypes.h"
 #include "camera.h"
 #include "mongoose.h"
 #include "queue.h"
@@ -21,17 +19,6 @@ static void fill_exposures(void);
 static void fill_iso_speeds(void);
 static void copy_all_exposures(void);
 static void copy_all_isos(void);
-static void format_exposure(int64_t exposure, char *value_str, size_t size);
-
-#ifdef __MACOS__
-extern __uint64_t __thread_selfid(void);
-#endif
-
-static int64_t get_system_nanos(void) {
-  struct timespec ts = {0, 0};
-  timespec_get(&ts, TIME_UTC);
-  return (int64_t)ts.tv_sec * SEC_TO_NS + (int64_t)ts.tv_nsec;
-}
 
 static struct {
   pthread_mutex_t mutex;
@@ -43,11 +30,11 @@ static struct {
     .state =
         {
             .running = true,
-            .delay_ns = 1 * SEC_TO_NS,
             .iso_index = 0,
             .exposure_index = 0,
-            .exposure_ns = 31 * SEC_TO_NS,
-            .interval_ns = 1 * SEC_TO_NS,
+            .delay_us = 1 * SEC_TO_US,
+            .exposure_us = 31 * SEC_TO_US,
+            .interval_us = 1 * SEC_TO_US,
             .frames = 2,
             .frames_taken = 0,
             .initialized = false,
@@ -65,129 +52,129 @@ struct sync_queue_t g_main_queue = {
 };
 
 struct exposure_t {
-  int64_t shutter_speed_ns;
-  EdsUInt32 shutter_param;
+  const char *description;
+  EdsUInt32 param;
 };
 
 struct iso_t {
-  const char *iso_description;
-  EdsUInt32 iso_param;
+  const char *description;
+  EdsUInt32 param;
 };
 
 // todo: add description field
 static const struct exposure_t g_all_exposures[] = {
     // {.shutter_speed_ns = 0xFFFFFFFFFFFFFF, .shutter_speed = 0x0C},
-    {.shutter_speed_ns = 30000000000ull, .shutter_param = 0x10},
-    {.shutter_speed_ns = 25000000000ull, .shutter_param = 0x13},
-    {.shutter_speed_ns = 20000000000ull, .shutter_param = 0x14},
-    {.shutter_speed_ns = 15000000000ull, .shutter_param = 0x18},
-    {.shutter_speed_ns = 13000000000ull, .shutter_param = 0x1B},
-    {.shutter_speed_ns = 10000000000ull, .shutter_param = 0x1C},
-    {.shutter_speed_ns = 8000000000ull, .shutter_param = 0x20},
-    {.shutter_speed_ns = 6000000000ull, .shutter_param = 0x24},
-    {.shutter_speed_ns = 5000000000ull, .shutter_param = 0x25},
-    {.shutter_speed_ns = 4000000000ull, .shutter_param = 0x28},
-    {.shutter_speed_ns = 3200000000ull, .shutter_param = 0x2B},
-    {.shutter_speed_ns = 3000000000ull, .shutter_param = 0x2C},
-    {.shutter_speed_ns = 2500000000ull, .shutter_param = 0x2D},
-    {.shutter_speed_ns = 2000000000ull, .shutter_param = 0x30},
-    {.shutter_speed_ns = 1600000000ull, .shutter_param = 0x33},
-    {.shutter_speed_ns = 1500000000ull, .shutter_param = 0x34},
-    {.shutter_speed_ns = 1300000000ull, .shutter_param = 0x35},
-    {.shutter_speed_ns = 1000000000ull, .shutter_param = 0x38},
-    {.shutter_speed_ns = 800000000ull, .shutter_param = 0x3B},
-    {.shutter_speed_ns = 700000000ull, .shutter_param = 0x3C},
-    {.shutter_speed_ns = 600000000ull, .shutter_param = 0x3D},
-    {.shutter_speed_ns = 500000000ull, .shutter_param = 0x40},
-    {.shutter_speed_ns = 400000000ull, .shutter_param = 0x43},
-    {.shutter_speed_ns = 300000000ull, .shutter_param = 0x44},
-    {.shutter_speed_ns = SEC_TO_NS / 4, .shutter_param = 0x48},
-    {.shutter_speed_ns = SEC_TO_NS / 5, .shutter_param = 0x4B},
-    {.shutter_speed_ns = SEC_TO_NS / 6, .shutter_param = 0x4C},
-    {.shutter_speed_ns = SEC_TO_NS / 8, .shutter_param = 0x50},
-    {.shutter_speed_ns = SEC_TO_NS / 10, .shutter_param = 0x54},
-    {.shutter_speed_ns = SEC_TO_NS / 13, .shutter_param = 0x55},
-    {.shutter_speed_ns = SEC_TO_NS / 15, .shutter_param = 0x58},
-    {.shutter_speed_ns = SEC_TO_NS / 20, .shutter_param = 0x5C},
-    {.shutter_speed_ns = SEC_TO_NS / 25, .shutter_param = 0x5D},
-    {.shutter_speed_ns = SEC_TO_NS / 30, .shutter_param = 0x60},
-    {.shutter_speed_ns = SEC_TO_NS / 40, .shutter_param = 0x63},
-    {.shutter_speed_ns = SEC_TO_NS / 45, .shutter_param = 0x64},
-    {.shutter_speed_ns = SEC_TO_NS / 50, .shutter_param = 0x65},
-    {.shutter_speed_ns = SEC_TO_NS / 60, .shutter_param = 0x68},
-    {.shutter_speed_ns = SEC_TO_NS / 80, .shutter_param = 0x6B},
-    {.shutter_speed_ns = SEC_TO_NS / 90, .shutter_param = 0x6C},
-    {.shutter_speed_ns = SEC_TO_NS / 100, .shutter_param = 0x6D},
-    {.shutter_speed_ns = SEC_TO_NS / 125, .shutter_param = 0x70},
-    {.shutter_speed_ns = SEC_TO_NS / 160, .shutter_param = 0x73},
-    {.shutter_speed_ns = SEC_TO_NS / 180, .shutter_param = 0x74},
-    {.shutter_speed_ns = SEC_TO_NS / 200, .shutter_param = 0x75},
-    {.shutter_speed_ns = SEC_TO_NS / 250, .shutter_param = 0x78},
-    {.shutter_speed_ns = SEC_TO_NS / 320, .shutter_param = 0x7B},
-    {.shutter_speed_ns = SEC_TO_NS / 350, .shutter_param = 0x7C},
-    {.shutter_speed_ns = SEC_TO_NS / 400, .shutter_param = 0x7D},
-    {.shutter_speed_ns = SEC_TO_NS / 500, .shutter_param = 0x80},
-    {.shutter_speed_ns = SEC_TO_NS / 640, .shutter_param = 0x83},
-    {.shutter_speed_ns = SEC_TO_NS / 750, .shutter_param = 0x84},
-    {.shutter_speed_ns = SEC_TO_NS / 800, .shutter_param = 0x85},
-    {.shutter_speed_ns = SEC_TO_NS / 1000, .shutter_param = 0x88},
-    {.shutter_speed_ns = SEC_TO_NS / 1250, .shutter_param = 0x8B},
-    {.shutter_speed_ns = SEC_TO_NS / 1500, .shutter_param = 0x8C},
-    {.shutter_speed_ns = SEC_TO_NS / 1600, .shutter_param = 0x8D},
-    {.shutter_speed_ns = SEC_TO_NS / 2000, .shutter_param = 0x90},
-    {.shutter_speed_ns = SEC_TO_NS / 2500, .shutter_param = 0x93},
-    {.shutter_speed_ns = SEC_TO_NS / 3000, .shutter_param = 0x94},
-    {.shutter_speed_ns = SEC_TO_NS / 3200, .shutter_param = 0x95},
-    {.shutter_speed_ns = SEC_TO_NS / 4000, .shutter_param = 0x98},
-    {.shutter_speed_ns = SEC_TO_NS / 5000, .shutter_param = 0x9B},
-    {.shutter_speed_ns = SEC_TO_NS / 6000, .shutter_param = 0x9C},
-    {.shutter_speed_ns = SEC_TO_NS / 6400, .shutter_param = 0x9D},
-    {.shutter_speed_ns = SEC_TO_NS / 8000, .shutter_param = 0xA0},
-    {.shutter_speed_ns = SEC_TO_NS / 10000, .shutter_param = 0xA3},
-    {.shutter_speed_ns = SEC_TO_NS / 12800, .shutter_param = 0xA5},
-    {.shutter_speed_ns = SEC_TO_NS / 16000, .shutter_param = 0xA8},
+    {.description = "30\"", .param = 0x10},
+    {.description = "25\"", .param = 0x13},
+    {.description = "20\"", .param = 0x14},
+    {.description = "15\"", .param = 0x18},
+    {.description = "13\"", .param = 0x1B},
+    {.description = "10\"", .param = 0x1C},
+    {.description = "8\"", .param = 0x20},
+    {.description = "6\"", .param = 0x24},
+    {.description = "5\"", .param = 0x25},
+    {.description = "4\"", .param = 0x28},
+    {.description = "3\"", .param = 0x2B},
+    {.description = "3\"", .param = 0x2C},
+    {.description = "2.5\"", .param = 0x2D},
+    {.description = "2.0\"", .param = 0x30},
+    {.description = "1.6\"", .param = 0x33},
+    {.description = "1.5\"", .param = 0x34},
+    {.description = "1.3\"", .param = 0x35},
+    {.description = "1.0\"", .param = 0x38},
+    {.description = "0.8\"", .param = 0x3B},
+    {.description = "0.7\"", .param = 0x3C},
+    {.description = "0.6\"", .param = 0x3D},
+    {.description = "0.5\"", .param = 0x40},
+    {.description = "0.4\"", .param = 0x43},
+    {.description = "0.3\"", .param = 0x44},
+    {.description = "1/4\"", .param = 0x48},
+    {.description = "1/5\"", .param = 0x4B},
+    {.description = "1/6\"", .param = 0x4C},
+    {.description = "1/8\"", .param = 0x50},
+    {.description = "1/10\"", .param = 0x54},
+    {.description = "1/13\"", .param = 0x55},
+    {.description = "1/15\"", .param = 0x58},
+    {.description = "1/20\"", .param = 0x5C},
+    {.description = "1/25\"", .param = 0x5D},
+    {.description = "1/30\"", .param = 0x60},
+    {.description = "1/40\"", .param = 0x63},
+    {.description = "1/45\"", .param = 0x64},
+    {.description = "1/50\"", .param = 0x65},
+    {.description = "1/60\"", .param = 0x68},
+    {.description = "1/80\"", .param = 0x6B},
+    {.description = "1/90\"", .param = 0x6C},
+    {.description = "1/100\"", .param = 0x6D},
+    {.description = "1/125\"", .param = 0x70},
+    {.description = "1/160\"", .param = 0x73},
+    {.description = "1/180\"", .param = 0x74},
+    {.description = "1/200\"", .param = 0x75},
+    {.description = "1/250\"", .param = 0x78},
+    {.description = "1/320\"", .param = 0x7B},
+    {.description = "1/350\"", .param = 0x7C},
+    {.description = "1/400\"", .param = 0x7D},
+    {.description = "1/500\"", .param = 0x80},
+    {.description = "1/640\"", .param = 0x83},
+    {.description = "1/750\"", .param = 0x84},
+    {.description = "1/800\"", .param = 0x85},
+    {.description = "1/1000\"", .param = 0x88},
+    {.description = "1/1250\"", .param = 0x8B},
+    {.description = "1/1500\"", .param = 0x8C},
+    {.description = "1/1600\"", .param = 0x8D},
+    {.description = "1/2000\"", .param = 0x90},
+    {.description = "1/2500\"", .param = 0x93},
+    {.description = "1/3000\"", .param = 0x94},
+    {.description = "1/3200\"", .param = 0x95},
+    {.description = "1/4000\"", .param = 0x98},
+    {.description = "1/5000\"", .param = 0x9B},
+    {.description = "1/6000\"", .param = 0x9C},
+    {.description = "1/6400\"", .param = 0x9D},
+    {.description = "1/8000\"", .param = 0xA0},
+    {.description = "1/10000\"", .param = 0xA3},
+    {.description = "1/12800\"", .param = 0xA5},
+    {.description = "1/16000\"", .param = 0xA8},
 };
 
 static const struct iso_t g_all_isos[] = {
-    {.iso_description = "Auto", .iso_param = 0x0},
-    {.iso_description = "ISO 6", .iso_param = 0x28},
-    {.iso_description = "ISO 12", .iso_param = 0x30},
-    {.iso_description = "ISO 25", .iso_param = 0x38},
-    {.iso_description = "ISO 50", .iso_param = 0x40},
-    {.iso_description = "ISO 100", .iso_param = 0x48},
-    {.iso_description = "ISO 125", .iso_param = 0x4b},
-    {.iso_description = "ISO 160", .iso_param = 0x4d},
-    {.iso_description = "ISO 200", .iso_param = 0x50},
-    {.iso_description = "ISO 250", .iso_param = 0x53},
-    {.iso_description = "ISO 320", .iso_param = 0x55},
-    {.iso_description = "ISO 400", .iso_param = 0x56},
-    {.iso_description = "ISO 500", .iso_param = 0x5b},
-    {.iso_description = "ISO 640", .iso_param = 0x5d},
-    {.iso_description = "ISO 800", .iso_param = 0x60},
-    {.iso_description = "ISO 1000", .iso_param = 0x63},
-    {.iso_description = "ISO 1250", .iso_param = 0x65},
-    {.iso_description = "ISO 1600", .iso_param = 0x68},
-    {.iso_description = "ISO 2000", .iso_param = 0x6b},
-    {.iso_description = "ISO 2500", .iso_param = 0x6d},
-    {.iso_description = "ISO 3200", .iso_param = 0x70},
-    {.iso_description = "ISO 4000", .iso_param = 0x73},
-    {.iso_description = "ISO 5000", .iso_param = 0x75},
-    {.iso_description = "ISO 6400", .iso_param = 0x78},
-    {.iso_description = "ISO 8000", .iso_param = 0x07b},
-    {.iso_description = "ISO 10000", .iso_param = 0x7d},
-    {.iso_description = "ISO 12800", .iso_param = 0x80},
-    {.iso_description = "ISO 16000", .iso_param = 0x83},
-    {.iso_description = "ISO 20000", .iso_param = 0x85},
-    {.iso_description = "ISO 25600", .iso_param = 0x88},
-    {.iso_description = "ISO 32000", .iso_param = 0x8b},
-    {.iso_description = "ISO 40000", .iso_param = 0x8d},
-    {.iso_description = "ISO 51200", .iso_param = 0x90},
-    {.iso_description = "ISO 64000", .iso_param = 0x3},
-    {.iso_description = "ISO 80000", .iso_param = 0x95},
-    {.iso_description = "ISO 102400", .iso_param = 0x98},
-    {.iso_description = "ISO 204800", .iso_param = 0xa0},
-    {.iso_description = "ISO 409600", .iso_param = 0xa8},
-    {.iso_description = "ISO 819200", .iso_param = 0xb0},
+    {.description = "Auto", .param = 0x0},
+    {.description = "ISO 6", .param = 0x28},
+    {.description = "ISO 12", .param = 0x30},
+    {.description = "ISO 25", .param = 0x38},
+    {.description = "ISO 50", .param = 0x40},
+    {.description = "ISO 100", .param = 0x48},
+    {.description = "ISO 125", .param = 0x4b},
+    {.description = "ISO 160", .param = 0x4d},
+    {.description = "ISO 200", .param = 0x50},
+    {.description = "ISO 250", .param = 0x53},
+    {.description = "ISO 320", .param = 0x55},
+    {.description = "ISO 400", .param = 0x56},
+    {.description = "ISO 500", .param = 0x5b},
+    {.description = "ISO 640", .param = 0x5d},
+    {.description = "ISO 800", .param = 0x60},
+    {.description = "ISO 1000", .param = 0x63},
+    {.description = "ISO 1250", .param = 0x65},
+    {.description = "ISO 1600", .param = 0x68},
+    {.description = "ISO 2000", .param = 0x6b},
+    {.description = "ISO 2500", .param = 0x6d},
+    {.description = "ISO 3200", .param = 0x70},
+    {.description = "ISO 4000", .param = 0x73},
+    {.description = "ISO 5000", .param = 0x75},
+    {.description = "ISO 6400", .param = 0x78},
+    {.description = "ISO 8000", .param = 0x07b},
+    {.description = "ISO 10000", .param = 0x7d},
+    {.description = "ISO 12800", .param = 0x80},
+    {.description = "ISO 16000", .param = 0x83},
+    {.description = "ISO 20000", .param = 0x85},
+    {.description = "ISO 25600", .param = 0x88},
+    {.description = "ISO 32000", .param = 0x8b},
+    {.description = "ISO 40000", .param = 0x8d},
+    {.description = "ISO 51200", .param = 0x90},
+    {.description = "ISO 64000", .param = 0x3},
+    {.description = "ISO 80000", .param = 0x95},
+    {.description = "ISO 102400", .param = 0x98},
+    {.description = "ISO 204800", .param = 0xa0},
+    {.description = "ISO 409600", .param = 0xa8},
+    {.description = "ISO 819200", .param = 0xb0},
 };
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
@@ -211,22 +198,6 @@ bool is_running(void) {
   bool ret = g_state.state.running;
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
   return ret;
-}
-
-static bool nssleep(int64_t timer_ns) {
-  struct timespec ts = {
-      .tv_sec = timer_ns / SEC_TO_NS,
-      .tv_nsec = timer_ns % SEC_TO_NS,
-  };
-  struct timespec rem = {0, 0};
-
-  while (nanosleep(&ts, &rem) < 0) {
-    if (errno != EINTR)
-      return false;
-    ts = rem;
-  }
-
-  return true;
 }
 
 #ifdef CAMERA_EVENTS
@@ -314,18 +285,18 @@ static bool detect_connected_camera(void) {
 }
 
 static bool press_shutter(int64_t *ts) {
-  int64_t start = get_system_nanos();
+  int64_t start = get_system_micros();
   EdsError err =
       EdsSendCommand(g_state.camera, kEdsCameraCommand_PressShutterButton,
                      kEdsCameraCommand_ShutterButton_Completely_NonAF);
-  int64_t delta = get_system_nanos() - start;
+  int64_t delta = get_system_micros() - start;
 
   if (err != EDS_ERR_OK) {
     MG_DEBUG(("Press Shutter err = %d", err));
     return false;
   }
 
-  MG_DEBUG(("Press Button: %lld ms", delta / 1000000));
+  MG_DEBUG(("Press Button: %lld ms", delta / 1000));
 
   if (ts != NULL)
     *ts = start;
@@ -334,11 +305,11 @@ static bool press_shutter(int64_t *ts) {
 }
 
 static bool release_shutter(int64_t *ts) {
-  int64_t start = get_system_nanos();
+  int64_t start = get_system_micros();
   EdsError err =
       EdsSendCommand(g_state.camera, kEdsCameraCommand_PressShutterButton,
                      kEdsCameraCommand_ShutterButton_OFF);
-  int64_t end = get_system_nanos();
+  int64_t end = get_system_micros();
 
   if (err != EDS_ERR_OK) {
     MG_DEBUG(("Release Shutter err = %d", err));
@@ -346,7 +317,7 @@ static bool release_shutter(int64_t *ts) {
   }
 
   int64_t delta = end - start;
-  MG_DEBUG(("Release Button: %lld ms", delta / 1000000));
+  MG_DEBUG(("Release Button: %lld ms", delta / 1000));
 
   if (ts != NULL)
     *ts = end;
@@ -417,10 +388,9 @@ static void update_shutter_speed(void) {
   }
 
   if (g_state.state.exposure_index < g_exposures_size) {
-    char value[32];
-    format_exposure(g_exposures[g_state.state.exposure_index].shutter_speed_ns, value, sizeof(value));
-    MG_DEBUG(("Setting shutter speed = %s", value));
-    set_shutter_speed(g_exposures[g_state.state.exposure_index].shutter_param);
+    struct exposure_t exposure = g_exposures[g_state.state.exposure_index];
+    MG_DEBUG(("Setting shutter speed = %s", exposure.description));
+    set_shutter_speed(exposure.param);
   } else {
     MG_DEBUG(("Setting camera to Bulb mode"));
     set_shutter_speed(0x0C);
@@ -433,8 +403,9 @@ static void update_iso_speed(void) {
   }
 
   if (g_state.state.iso_index < g_isos_size) {
-    MG_DEBUG(("Setting to ISO = %s", g_isos[g_state.state.iso_index].iso_description));
-    set_iso_speed(g_isos[g_state.state.iso_index].iso_param);
+    struct iso_t iso = g_isos[g_state.state.iso_index];
+    MG_DEBUG(("Setting to ISO = %s", iso.description));
+    set_iso_speed(iso.param);
   } else {
     MG_DEBUG(("Setting camera to ISO auto"));
     set_iso_speed(0x0);
@@ -500,8 +471,8 @@ static void disconnect_command(void *data) {
 }
 
 static void initial_delay_command(void *data) {
-  if (g_state.state.delay_ns > 0) {
-    if (!nssleep(g_state.state.delay_ns)) {
+  if (g_state.state.delay_us > 0) {
+    if (!ussleep(g_state.state.delay_us)) {
       g_state.state.shooting = false;
       return;
     }
@@ -511,7 +482,7 @@ static void initial_delay_command(void *data) {
 }
 
 static void interval_delay_command(void *data) {
-  if (nssleep(g_state.state.interval_ns)) {
+  if (ussleep(g_state.state.interval_us)) {
     async_queue_post(&g_main_queue, TAKE_PICTURE, NULL, /*async*/ true);
   } else {
     MG_DEBUG(("Stop shooting"));
@@ -528,21 +499,21 @@ static void take_picture_command(void *data) {
     press_shutter(NULL);
     release_shutter(NULL);
   } else {
-    int64_t delay_average_ns = get_delay_average();
+    int64_t delay_average_us = get_delay_average();
 
-    int64_t start_ns, end_ns;
+    int64_t start_us, end_us;
 
-    bool success = press_shutter(&start_ns);
+    bool success = press_shutter(&start_us);
 
     if (success) {
       g_state.state.shooting =
-          nssleep(g_state.state.exposure_ns - delay_average_ns);
+          ussleep(g_state.state.exposure_us - delay_average_us);
     }
 
-    success = release_shutter(&end_ns);
+    success = release_shutter(&end_us);
 
     if (success)
-      add_delay((end_ns - start_ns) - g_state.state.exposure_ns);
+      add_delay((end_us - start_us) - g_state.state.exposure_us);
   }
 
   if (g_state.state.shooting &&
@@ -634,7 +605,7 @@ void set_exposure_custom(const char *value_str) {
 
   int exposure = 0;
   if (sscanf(value_str, "%d", &exposure) == 1) {
-    g_state.state.exposure_ns = exposure * SEC_TO_NS;
+    g_state.state.exposure_us = exposure * SEC_TO_US;
   }
 
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
@@ -671,7 +642,7 @@ void set_delay(const char *value_str) {
 
   int32_t delay = 0;
   if (sscanf(value_str, "%d", &delay) == 1) {
-    g_state.state.delay_ns = delay * SEC_TO_NS;
+    g_state.state.delay_us = delay * SEC_TO_US;
   }
 
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
@@ -682,7 +653,7 @@ void set_interval(const char *value_str) {
 
   int32_t interval = 0;
   if (sscanf(value_str, "%d", &interval) == 1) {
-    g_state.state.interval_ns = interval * SEC_TO_NS;
+    g_state.state.interval_us = interval * SEC_TO_US;
   }
 
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
@@ -699,26 +670,14 @@ void set_frames(const char *value_str) {
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
 }
 
-static void format_exposure(int64_t exposure, char *value_str, size_t size) {
-  // if exposure >= 300ms use decimal format
-  // otherwise use fractional format
-  if (exposure >= 300 * MILLI_TO_NS) {
-    float seconds = (float)exposure / SEC_TO_NS;
-    snprintf(value_str, size, "%.1f\"", seconds);
-  } else {
-    int seconds = SEC_TO_NS / exposure;
-    snprintf(value_str, size, "1/%d\"", seconds);
-  }
-}
-
 void get_exposure_at(int32_t index, char *value_str, size_t size) {
-  format_exposure(g_exposures[index].shutter_speed_ns, value_str, size);
+  strncpy(value_str, g_exposures[index].description, size);
 }
 
 int32_t get_exposure_count(void) { return g_exposures_size; }
 
 void get_iso_at(int32_t index, char *value_str, size_t size) {
-  strncpy(value_str, g_isos[index].iso_description, size);
+  strncpy(value_str, g_isos[index].description, size);
 }
 
 int32_t get_iso_count(void) { return g_isos_size; }
@@ -734,7 +693,7 @@ static void fill_exposures(void) {
       EdsInt32 key = property_desc.propDesc[i];
 
       for (int j = 0; j < ALL_EXPOSURES_SIZE; j++) {
-        if (g_all_exposures[j].shutter_param == key) {
+        if (g_all_exposures[j].param == key) {
           memcpy(&g_exposures[g_exposures_size++], &g_all_exposures[j],
                  sizeof(struct exposure_t));
           break;
@@ -757,7 +716,7 @@ static void fill_iso_speeds(void) {
       EdsInt32 key = property_desc.propDesc[i];
 
       for (int j = 0; j < ALL_ISOS_SIZE; j++) {
-        if (g_all_isos[j].iso_param == key) {
+        if (g_all_isos[j].param == key) {
           memcpy(&g_isos[g_isos_size++], &g_all_isos[j], sizeof(struct iso_t));
           break;
         }

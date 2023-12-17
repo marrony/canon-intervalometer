@@ -135,7 +135,7 @@ static size_t render_exposure(mg_pfn_t out, void *ptr, va_list *ap) {
         "  hx-validate=\"true\" min=\"0\" inputmode=\"numeric\" "
         "  hx-post=\"/api/camera/state/exposure\" "
         "  hx-swap=\"outerHTML\" hx-target=\".input-exposure\" %s />",
-        (int32_t)(state->exposure_ns / SEC_TO_NS),
+        (int32_t)(state->exposure_us / SEC_TO_US),
         inputs_enabled(state) ? "" : "disabled");
   }
 
@@ -179,12 +179,12 @@ static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
 
   struct input_t delay = {
       .id = "delay",
-      .value = state->delay_ns / SEC_TO_NS,
+      .value = state->delay_us / SEC_TO_US,
       .enabled = enabled,
   };
   struct input_t interval = {
       .id = "interval",
-      .value = state->interval_ns / SEC_TO_NS,
+      .value = state->interval_us / SEC_TO_US,
       .enabled = enabled,
   };
   struct input_t frames = {
@@ -217,7 +217,7 @@ static size_t render_inputs_content(mg_pfn_t out, void *ptr, va_list *ap) {
                     "  </fieldset>"
                     "</div>",
                     render_input, &delay, render_exposure, state, render_input,
-                    &interval, render_input, &frames, render_iso, &state);
+                    &interval, render_input, &frames, render_iso, state);
 }
 
 static size_t render_actions_content(mg_pfn_t out, void *ptr, va_list *ap) {
@@ -351,7 +351,7 @@ static void handle_input_delay(struct mg_connection *c,
 
   struct camera_state_t state;
   get_copy_state(&state);
-  render_input_response(c, "delay", state.delay_ns / SEC_TO_NS,
+  render_input_response(c, "delay", state.delay_us / SEC_TO_US,
                         inputs_enabled(&state));
 }
 
@@ -363,7 +363,7 @@ static void handle_input_interval(struct mg_connection *c,
 
   struct camera_state_t state;
   get_copy_state(&state);
-  render_input_response(c, "interval", state.interval_ns / SEC_TO_NS,
+  render_input_response(c, "interval", state.interval_us / SEC_TO_US,
                         inputs_enabled(&state));
 }
 

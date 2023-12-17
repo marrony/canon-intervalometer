@@ -29,11 +29,11 @@ enum command_type {
 
 struct camera_state_t {
   bool running;
-  int64_t delay_ns;
   int32_t iso_index;
   int32_t exposure_index;
-  int64_t exposure_ns;
-  int64_t interval_ns;
+  int32_t delay_us;
+  int32_t exposure_us;
+  int32_t interval_us;
   int32_t frames;
   int32_t frames_taken;
   bool initialized;
