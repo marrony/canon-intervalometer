@@ -1,43 +1,87 @@
-UNAME_S := $(shell uname -s)
+OS := $(shell uname -s)
+ARCH := $(shell uname -m)
 
-#CC = zig cc
-CC = gcc
+CC = zig cc
 
 common_cflags := -isystem ./canon-sdk/EDSDK/Header
 
 LDFLAGS := -lpthread
-CFLAGS := $(common_cflags) -Wall -Werror -pedantic
+CFLAGS := $(common_cflags) -std=gnu17 -Wall -Werror -pedantic
 # CFLAGS += -Wsystem-headers
 DEPS :=
 
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(shell uname -s)-$(shell uname -m),$(OS)-$(ARCH))
+TARGET := --target=native
+else
+#arch-os-abi
+ifeq ($(OS)-$(ARCH),Darwin-arm64)
+TARGET := --target=arm-macos-macabi
+endif
+
+ifeq ($(OS)-$(ARCH),Linux-armv7l)
+TARGET := --target=arm-linux-gnueabihf
+endif
+
+ifeq ($(OS)-$(ARCH),Linux-armv8)
+TARGET := --target=aarch64-linux-gnueabihf
+endif
+endif
+
+#disable cross compilation on gcc
+ifeq ($(CC),gcc)
+TARGET :=
+endif
+
+#disable cross compilation on clang
+ifeq ($(CC),clang)
+TARGET :=
+endif
+
+ifeq ($(OS),Darwin)
 LDFLAGS += -Fcanon-sdk/EDSDK/Framework -framework EDSDK
 LDFLAGS += -Wl,-rpath -Wl,@executable_path/Framework
-CFLAGS += --std=c17 -D__MACOS__ -D__APPLE__
+CFLAGS += -D__MACOS__ -D__APPLE__
 DEPS += bin/Framework/EDSDK.framework
 endif
 
-ifeq ($(UNAME_S),Linux)
-ifeq ($(shell uname -m),armv7l)
+ifeq ($(OS),Linux)
+ifeq ($(ARCH),armv7l)
 LIB_DIR = canon-sdk/EDSDK/Library/ARM32
-DEPS += bin/web_root
 endif
-ifeq ($(shell uname -m),armv8)
+
+ifeq ($(ARCH),armv8)
 LIB_DIR = canon-sdk/EDSDK/Library/ARM64
 endif
-LDFLAGS += -lEDSDK -L$(LIB_DIR)
-LDFLAGS += -Wl,-rpath -Wl,\$$ORIGIN
+
+LDFLAGS += '-Wl,-rpath,\$$ORIGIN'
+LDFLAGS += '-Wl,-rpath,.'
+LDFLAGS += -L$(LIB_DIR) -l :libEDSDK.so
 CFLAGS += -DTARGET_OS_LINUX
 DEPS += bin/libEDSDK.so
 endif
+
+LDFLAGS += $(TARGET)
+CFLAGS += $(TARGET)
+DEPS += bin/web_root/assets
 
 HDRS := src/camera.h src/http.h src/queue.h src/timer.h src/mongoose.h
 SRCS := src/main.c src/camera.c src/http.c src/queue.c src/timer.c src/mongoose.c
 OBJS := $(patsubst src/%.c, bin/%.o, $(SRCS))
 
-.PHONY: all sync cppcheck update-mongoose defs
+.PHONY: all sync scp cppcheck update-mongoose defs
 
-all: bin bin/web_root/assets bin/run-canon.sh bin/canon-intervalometer $(DEPS)
+all: bin $(DEPS) bin/run-canon.sh bin/canon-intervalometer
+
+ifeq ($(SCP_DEST),)
+scp:
+	@echo "SCP_DEST not provided"
+else
+scp: bin/canon-intervalometer bin/libEDSDK.so bin/run-canon.sh bin/web_root/assets
+	scp bin/canon-intervalometer $(SCP_DEST)/bin/
+	scp bin/libEDSDK.so $(SCP_DEST)/bin/
+	scp bin/run-canon.sh $(SCP_DEST)/bin/
+	scp -r bin/web_root $(SCP_DEST)/bin/
+endif
 
 bin/run-canon.sh: run-canon.sh bin/canon-intervalometer Makefile
 	cp run-canon.sh bin/run-canon.sh
