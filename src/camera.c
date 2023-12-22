@@ -61,7 +61,6 @@ struct iso_t {
   EdsUInt32 param;
 };
 
-// todo: add description field
 static const struct exposure_t g_all_exposures[] = {
     // {.shutter_speed_ns = 0xFFFFFFFFFFFFFF, .shutter_speed = 0x0C},
     {.description = "30\"", .param = 0x10},
