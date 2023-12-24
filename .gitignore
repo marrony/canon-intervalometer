@@ -4,3 +4,5 @@
 bin/
 build/
 node_modules/
+zig-cache/
+zig-out/
