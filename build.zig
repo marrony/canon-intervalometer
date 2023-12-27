@@ -1,20 +1,11 @@
 const std = @import("std");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
 pub fn build(b: *std.Build) void {
+    const use_link_hack = b.option(bool, "link-hack", "Use stub link hack") orelse false;
+
     b.exe_dir = "bin";
 
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
@@ -26,61 +17,103 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{ .path = "src" });
     exe.addIncludePath(.{ .path = "canon-sdk/EDSDK/Header" });
 
-    const sources = [_][]const u8{ "src/camera.c", "src/http.c", "src/main.c", "src/mongoose.c", "src/queue.c", "src/timer.c" };
-    const flags = [_][]const u8{"-std=gnu17"};
+    const sources = &.{
+        "src/camera.c",
+        "src/http.c",
+        "src/main.c",
+        "src/mongoose.c",
+        "src/queue.c",
+        "src/timer.c",
+    };
+    const flags = &.{"-std=gnu17"};
 
-    exe.addCSourceFiles(&sources, &flags);
+    exe.addCSourceFiles(.{ .files = sources, .flags = flags });
+    exe.linkLibC();
 
     if (target.isDarwin()) {
-        exe.defineCMacroRaw("__MACOS__");
-        exe.defineCMacroRaw("__APPLE__");
+        exe.defineCMacro("__MACOS__", null);
+        exe.defineCMacro("__APPLE__", null);
         exe.addFrameworkPath(.{ .path = "canon-sdk/EDSDK/Framework" });
         exe.linkFramework("EDSDK");
         exe.addRPath(.{ .path = "@executable_path/Framework" });
-        //todo: copy Framework to /bin
+        //todo: copy Framework folder to /bin preserving symlinks
+        b.installDirectory(.{
+            .source_dir = .{ .path = "canon-sdk/EDSDK/Framework" },
+            .install_dir = .bin,
+            .install_subdir = "Framework",
+        });
     } else if (target.isLinux()) {
-        exe.defineCMacroRaw("TARGET_OS_LINUX");
+        exe.defineCMacro("TARGET_OS_LINUX", null);
 
-        if (target.getCpu().arch == .arm) {
-            exe.addLibraryPath(.{ .path = "canon-sdk/EDSDK/Library/ARM32" });
+        const libDir = switch (target.getCpuArch()) {
+            .arm => "canon-sdk/EDSDK/Library/ARM32",
+            .aarch64 => "canon-sdk/EDSDK/Library/ARM64",
+            else => @panic("Unsupported CPU"),
+        };
+
+        exe.addLibraryPath(.{ .path = libDir });
+        b.installBinFile(libDir ++ "/libEDSDK.so", "libEDSDK.so");
+
+        if (use_link_hack) {
+            linkLibraryHack(b, exe, target, optimize);
+            exe.addRPath(.{ .path = ":." });
+        } else {
+            exe.linkSystemLibrary(":libEDSDK.so");
+            exe.addRPath(.{ .path = "$ORIGIN" });
         }
-
-        if (target.getCpu().arch == .aarch64) {
-            exe.addLibraryPath(.{ .path = "canon-sdk/EDSDK/Library/ARM64" });
-        }
-
-        exe.linkSystemLibrary("EDSDK");
-        exe.addRPath(.{ .path = "$ORIGIN" });
-        exe.addRPath(.{ .path = "." });
     } else {
         @panic("OS not supported");
     }
 
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
     b.installArtifact(exe);
+}
 
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
-    const run_cmd = b.addRunArtifact(exe);
+// create a stub .so with the symbols used
+// in the program just to satisfy the linker
+fn linkLibraryHack(b: *std.Build, exe: *std.Build.Step.Compile, target: std.zig.CrossTarget, optimize: std.builtin.Mode) void {
+    const lib_EDSDK = b.addSharedLibrary(.{
+        .name = "EDSDK",
+        .target = target,
+        .optimize = optimize,
+    });
 
-    // By making the run step depend on the install step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
-    run_cmd.step.dependOn(b.getInstallStep());
+    exe.linkLibrary(lib_EDSDK);
 
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+    const writeFile = b.addWriteFiles();
+    lib_EDSDK.step.dependOn(&writeFile.step);
+
+    const symbols = [_][]const u8{
+        "EdsSetPropertyData",
+        "EdsSendCommand",
+        "EdsGetPropertyDesc",
+        "EdsGetDeviceInfo",
+        "EdsGetChildAtIndex",
+        "EdsGetChildCount",
+        "EdsGetCameraList",
+        "EdsOpenSession",
+        "EdsInitializeSDK",
+        "EdsTerminateSDK",
+        "EdsRelease",
+        "EdsSendStatusCommand",
+        "EdsCloseSession",
+        "EdsGetEvent",
+    };
+
+    inline for (symbols) |sym| {
+        lib_EDSDK.addAssemblyFile(genStub(writeFile, sym));
     }
+}
 
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+fn genStub(writeFile: *std.Build.Step.WriteFile, comptime sym: []const u8) std.Build.LazyPath {
+    var buf: [100]u8 = undefined;
+
+    const formatted = std.fmt.bufPrint(&buf,
+        \\.global {0s}
+        \\.align 4
+        \\{0s}:
+        \\  .byte 0
+        \\
+    , .{sym}) catch @panic("Fail to format");
+
+    return writeFile.add(sym ++ ".S", formatted);
 }

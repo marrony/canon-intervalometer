@@ -126,3 +126,5 @@ cppcheck:
 defs:
 	$(CC) $(CFLAGS) -dM -E -x c /dev/null
 
+rpi:
+	zig build -Dtarget=arm-linux-gnueabihf --verbose-link
