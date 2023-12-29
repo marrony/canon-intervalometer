@@ -21,7 +21,7 @@ void print_help(char *cmdline) {
 
 static char web_root[PATH_MAX] = {0};
 
-int main(int argc, char *argv[]) {
+int _main(int argc, char *argv[]) {
   const char *short_options = "h::w::";
   const struct option long_options[] = {
       {"help", no_argument, NULL, 'h'},
