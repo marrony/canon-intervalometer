@@ -66,6 +66,12 @@ pub fn build(b: *std.Build) void {
         @panic("OS not supported");
     }
 
+    b.installDirectory(.{
+        .source_dir = .{ .path = "web-ui" },
+        .install_dir = .bin,
+        .install_subdir = "web_root/assets",
+    });
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
