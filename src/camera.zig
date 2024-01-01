@@ -15,14 +15,9 @@ const CommandErr = error{
     CameraErr,
 };
 
-const Iso = struct {
+pub const Option = struct {
     description: []const u8,
-    eds_param: edsdk.EdsUInt32,
-};
-
-const Exposure = struct {
-    description: []const u8,
-    eds_param: edsdk.EdsUInt32,
+    eds_param: u32,
 };
 
 const Command = union(enum) {
@@ -55,13 +50,13 @@ const Command = union(enum) {
 pub const Camera = struct {
     camera: edsdk.EdsCameraRef = undefined,
     running: bool,
-    iso_index: usize,
-    exposure_index: usize,
-    delay_us: i32,
-    exposure_us: i32,
-    interval_us: i32,
-    frames: i32,
-    frames_taken: i32,
+    iso_param: u32,
+    exposure_param: u32,
+    delay_us: u32,
+    exposure_us: u32,
+    interval_us: u32,
+    frames: u32,
+    frames_taken: u32,
     initialized: bool,
     connected: bool,
     shooting: bool,
@@ -133,12 +128,12 @@ pub const Camera = struct {
         if (!self.initialized or !self.connected)
             return CommandErr.InitErr;
 
-        if (self.exposure_index < exposures.len) {
+        if (self.exposure_param == 0xff) {
             try self.pressShutter();
+            std.time.sleep(@as(u64, @intCast(self.exposure_us * std.time.us_per_s)));
             try self.releaseShutter();
         } else {
             try self.pressShutter();
-            std.time.sleep(@as(u64, @intCast(self.exposure_us * std.time.us_per_s)));
             try self.releaseShutter();
         }
 
@@ -177,18 +172,22 @@ pub const Camera = struct {
         if (!self.initialized or !self.connected)
             return CommandErr.InitErr;
 
-        const eds_param = if (self.exposure_index < exposures.len) exposures[self.exposure_index].eds_param else 0x0c;
-
-        try self.setExposure(eds_param);
+        if (self.exposure_param != 0xff) {
+            try self.setExposure(self.exposure_param);
+        } else {
+            try self.setExposure(0x0c);
+        }
     }
 
     fn updateIsoSpeed(self: *Camera) !void {
         if (!self.initialized or !self.connected)
             return CommandErr.InitErr;
 
-        const eds_param = if (self.iso_index < isos.len) isos[self.iso_index].eds_param else 0x0;
-
-        try self.setIsoSpeed(eds_param);
+        if (self.iso_param != 0xff) {
+            try self.setIsoSpeed(self.iso_param);
+        } else {
+            try self.setIsoSpeed(0x0);
+        }
     }
 
     fn pressShutter(self: *Camera) !void {
@@ -213,26 +212,30 @@ pub const Camera = struct {
             return CommandErr.CameraErr;
     }
 
-    fn setExposure(self: *Camera, exposure: edsdk.EdsUInt32) !void {
+    fn setExposure(self: *Camera, exposure: u32) !void {
+        const param: edsdk.EdsUInt32 = exposure;
+
         const err = edsdk.EdsSetPropertyData(
             self.camera,
             edsdk.kEdsPropID_Tv,
             0,
             @sizeOf(edsdk.EdsUInt32),
-            &exposure,
+            &param,
         );
 
         if (err != edsdk.EDS_ERR_OK)
             return CommandErr.CameraErr;
     }
 
-    fn setIsoSpeed(self: *Camera, isoSpeed: edsdk.EdsUInt32) !void {
+    fn setIsoSpeed(self: *Camera, isoSpeed: u32) !void {
+        const param: edsdk.EdsUInt32 = isoSpeed;
+
         const err = edsdk.EdsSetPropertyData(
             self.camera,
             edsdk.kEdsPropID_ISOSpeed,
             0,
             @sizeOf(edsdk.EdsUInt32),
-            &isoSpeed,
+            &param,
         );
 
         if (err != edsdk.EDS_ERR_OK)
@@ -339,8 +342,8 @@ pub const Camera = struct {
 
 pub var g_camera = Camera{
     .running = false,
-    .iso_index = 0,
-    .exposure_index = 0,
+    .iso_param = 0xff,
+    .exposure_param = 0xff,
     .delay_us = 0,
     .exposure_us = 0,
     .interval_us = 0,
@@ -372,7 +375,7 @@ pub fn process_commands() void {
     }
 }
 
-const all_exposures = [_]Exposure{
+const all_exposures = [_]Option{
     .{ .description = "30\"", .eds_param = 0x10 },
     .{ .description = "25\"", .eds_param = 0x13 },
     .{ .description = "20\"", .eds_param = 0x14 },
@@ -444,7 +447,7 @@ const all_exposures = [_]Exposure{
     .{ .description = "1/16000\"", .eds_param = 0xA8 },
 };
 
-const all_isos = [_]Iso{
+const all_isos = [_]Option{
     .{ .description = "Auto", .eds_param = 0x0 },
     .{ .description = "ISO 6", .eds_param = 0x28 },
     .{ .description = "ISO 12", .eds_param = 0x30 },
@@ -486,16 +489,16 @@ const all_isos = [_]Iso{
     .{ .description = "ISO 819200", .eds_param = 0xb0 },
 };
 
-var exposures: [all_exposures.len]Exposure = undefined;
+var exposures: [all_exposures.len]Option = undefined;
 var exposures_len: usize = 0;
 
-var isos: [all_isos.len]Iso = undefined;
+var isos: [all_isos.len]Option = undefined;
 var isos_len: usize = 0;
 
-pub fn getExposures() []const Exposure {
+pub fn getExposures() []const Option {
     return exposures[0..exposures_len];
 }
 
-pub fn getIsos() []const Iso {
+pub fn getIsos() []const Option {
     return isos[0..isos_len];
 }

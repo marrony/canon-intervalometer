@@ -77,59 +77,15 @@ const get_handlers = [_]Handler{
     .{ .endpoint = "/", .handler = handle_get_index_html },
 };
 
-const Attribute = struct {
-    name: []const u8,
-    value: []const u8,
-
-    pub fn format(self: *const Attribute, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
-
-        try std.fmt.format(writer, "{s}=\"{s}\"", .{ self.name, self.value });
-    }
-};
-
-const HtmlTag = struct {
-    tag: []const u8,
-    attributes: []const Attribute,
-    nodes: []const *const HtmlTag,
-
-    pub fn node(tag: []const u8, attributes: []const Attribute, nodes: []const *const HtmlTag) HtmlTag {
-        return .{
-            .tag = tag,
-            .attributes = attributes,
-            .nodes = nodes,
-        };
-    }
-
-    pub fn attr(name: []const u8, value: []const u8) Attribute {
-        return .{ .name = name, .value = value };
-    }
-
-    pub fn format(self: *const HtmlTag, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
-
-        try std.fmt.format(writer, "<{s}", .{self.tag});
-        for (self.attributes) |a| {
-            try std.fmt.format(writer, " {}", .{a});
-        }
-
-        if (self.nodes.len > 0) {
-            try std.fmt.format(writer, ">", .{});
-            for (self.nodes) |n| {
-                try std.fmt.format(writer, "{}", .{n});
-            }
-            try std.fmt.format(writer, "</{s}>", .{self.tag});
-        } else {
-            try std.fmt.format(writer, "/>", .{});
-        }
-    }
+const InputKind = enum {
+    delay,
+    interval,
+    frames,
 };
 
 const Input = struct {
-    id: []const u8,
-    value: i32,
+    kind: InputKind,
+    value: u32,
     enabled: bool,
 
     pub fn format(self: *const Input, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
@@ -140,7 +96,7 @@ const Input = struct {
             \\<input type="number" name="{0s}" value="{1d}" class="input-{0s}" required hx-validate="true"
             \\ min="0" inputmode="numeric" hx-post="/api/camera/state/{0s}" hx-swap="outerHTML" {2s}/>
         , .{
-            self.id,
+            @tagName(self.kind),
             self.value,
             if (self.enabled) "" else "disabled ",
         });
@@ -152,7 +108,7 @@ fn handle_input_delay(response: *http.Server.Response) anyerror!void {
     const size = try response.readAll(&body);
 
     if (std.mem.startsWith(u8, body[0..size], "delay=")) {
-        if (std.fmt.parseUnsigned(i32, body["delay=".len..], 10)) |delay| {
+        if (std.fmt.parseUnsigned(u32, body["delay=".len..], 10)) |delay| {
             camera.g_camera.delay_us = delay;
         } else |_| {
             return try write(response, .bad_request, "Invalid delay input");
@@ -162,7 +118,7 @@ fn handle_input_delay(response: *http.Server.Response) anyerror!void {
     var buf: [1024]u8 = undefined;
 
     const input = Input{
-        .id = "delay",
+        .kind = .delay,
         .value = camera.g_camera.delay_us,
         .enabled = camera.g_camera.inputs_enabled(),
     };
@@ -177,8 +133,8 @@ fn handle_input_iso(response: *http.Server.Response) !void {
     const size = try response.readAll(&body);
 
     if (std.mem.startsWith(u8, body[0..size], "iso=")) {
-        if (std.fmt.parseUnsigned(usize, body["iso=".len..], 10)) |iso_index| {
-            camera.g_camera.iso_index = iso_index;
+        if (std.fmt.parseUnsigned(u32, body["iso=".len..], 10)) |iso_param| {
+            camera.g_camera.iso_param = iso_param;
         } else |_| {
             return try write(response, .bad_request, "Invalid ISO input");
         }
@@ -200,16 +156,18 @@ fn handle_input_exposure(response: *http.Server.Response) !void {
     const size = try response.readAll(&body);
 
     if (std.mem.startsWith(u8, body[0..size], "exposure=")) {
-        if (std.fmt.parseUnsigned(usize, body["exposure=".len..], 10)) |exposure_index| {
-            camera.g_camera.exposure_index = exposure_index;
+        if (std.fmt.parseUnsigned(u32, body["exposure=".len..], 10)) |exposure_param| {
+            camera.g_camera.exposure_param = exposure_param;
+            camera.g_camera.exposure_us = 0;
         } else |_| {
             return try write(response, .bad_request, "Invalid exposure input");
         }
     }
 
     if (std.mem.startsWith(u8, body[0..size], "exposure-custom=")) {
-        if (std.fmt.parseUnsigned(i32, body["exposure-custom=".len..], 10)) |exposure| {
+        if (std.fmt.parseUnsigned(u32, body["exposure-custom=".len..], 10)) |exposure| {
             camera.g_camera.exposure_us = exposure;
+            camera.g_camera.exposure_param = 0xff;
         } else |_| {
             return try write(response, .bad_request, "Invalid exposure input");
         }
@@ -231,7 +189,7 @@ fn handle_input_interval(response: *http.Server.Response) !void {
     const size = try response.readAll(&body);
 
     if (std.mem.startsWith(u8, body[0..size], "interval=")) {
-        if (std.fmt.parseUnsigned(i32, body["interval=".len..], 10)) |interval| {
+        if (std.fmt.parseUnsigned(u32, body["interval=".len..], 10)) |interval| {
             camera.g_camera.interval_us = interval;
         } else |_| {
             return try write(response, .bad_request, "Invalid interval input");
@@ -241,7 +199,7 @@ fn handle_input_interval(response: *http.Server.Response) !void {
     var buf: [1024]u8 = undefined;
 
     const input = Input{
-        .id = "interval",
+        .kind = .interval,
         .value = camera.g_camera.interval_us,
         .enabled = camera.g_camera.inputs_enabled(),
     };
@@ -256,7 +214,7 @@ fn handle_input_frames(response: *http.Server.Response) !void {
     const size = try response.readAll(&body);
 
     if (std.mem.startsWith(u8, body[0..size], "frames=")) {
-        if (std.fmt.parseUnsigned(i32, body["frames=".len..], 10)) |frames| {
+        if (std.fmt.parseUnsigned(u32, body["frames=".len..], 10)) |frames| {
             camera.g_camera.frames = frames;
         } else |_| {
             return try write(response, .bad_request, "Invalid frames input");
@@ -266,7 +224,7 @@ fn handle_input_frames(response: *http.Server.Response) !void {
     var buf: [1024]u8 = undefined;
 
     const input = Input{
-        .id = "frames",
+        .kind = .frames,
         .value = camera.g_camera.frames,
         .enabled = camera.g_camera.inputs_enabled(),
     };
@@ -394,6 +352,33 @@ fn handle_get_assets(response: *http.Server.Response) !void {
     log.info("Done finishing reponse", .{});
 }
 
+const OptionsContent = struct {
+    custom: ?camera.Option = null,
+    options: []const camera.Option,
+    selected: u32,
+
+    pub fn format(self: *const OptionsContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+
+        if (self.custom) |custom| {
+            const is_custom = self.selected == custom.eds_param;
+
+            try std.fmt.format(writer,
+                \\<option value="{1d}" {2s}>{0s}</option>
+            , .{ custom.description, custom.eds_param, if (is_custom) "selected" else "" });
+        }
+
+        for (self.options) |option| {
+            const is_selected = self.selected == option.eds_param;
+
+            try std.fmt.format(writer,
+                \\<option value="{1d}" {2s}>{0s}</option>
+            , .{ option.description, option.eds_param, if (is_selected) "selected" else "" });
+        }
+    }
+};
+
 const CameraContent = struct {
     camera: *const camera.Camera,
 
@@ -435,53 +420,6 @@ const CameraContent = struct {
     }
 };
 
-fn writeHtml(writer: anytype, comptime tag: anytype) !void {
-    const ArgsType = @TypeOf(tag);
-    const args_type_info = @typeInfo(ArgsType);
-    if (args_type_info != .Struct) {
-        @compileError("expected tuple or struct argument, found " ++ @typeName(ArgsType));
-    }
-
-    if (!@hasField(ArgsType, "tag")) {
-        @compileError("No tag found");
-    }
-
-    const tagName = comptime @field(tag, "tag");
-
-    const has_children = comptime @hasField(ArgsType, "children");
-    const has_text = comptime @hasField(ArgsType, "text");
-
-    if (has_children and has_text) {
-        @compileError("Tag cannot have children and text");
-    }
-
-    try std.fmt.format(writer, "<{s}>", .{tagName});
-
-    if (has_text) {
-        try std.fmt.format(writer, "{s}", .{@field(tag, "text")});
-    }
-
-    if (has_children) {
-        const children = comptime @field(tag, "children");
-
-        inline for (children) |child| {
-            try writeHtml(writer, child);
-        }
-    }
-
-    try std.fmt.format(writer, "</{s}>", .{tagName});
-
-    // std.meta.hasFn(comptime T: type, comptime name: []const u8)
-    //
-    // const fields_info = args_type_info.Struct.fields;
-    //
-    // // if (std.meta.hasFn(T, "format")) {
-    // //     return try value.format(actual_fmt, options, writer);
-    // // }
-    // for (fields_info) |field| {
-    // }
-}
-
 const ExposureContent = struct {
     camera: *const camera.Camera,
 
@@ -498,26 +436,19 @@ const ExposureContent = struct {
             \\  hx-swap="outerHTML" hx-target=".input-exposure" {s}>
         , .{if (self.camera.inputs_enabled()) "" else "disabled"});
 
-        const exposure_len = camera.getExposures().len;
-        const is_custom = camera.g_camera.exposure_index >= exposure_len;
+        const optionsContent: OptionsContent = .{
+            .custom = .{
+                .description = "Custom",
+                .eds_param = 0xff,
+            },
+            .options = camera.getExposures(),
+            .selected = self.camera.exposure_param,
+        };
 
-        try std.fmt.format(writer,
-            \\<option value="{0d}" {1s}>Custom</option>
-        , .{ exposure_len, if (is_custom) "selected" else "" });
+        try std.fmt.format(writer, "{}", .{optionsContent});
+        try std.fmt.format(writer, "</select>", .{});
 
-        for (camera.getExposures(), 0..) |exposure, idx| {
-            const is_selected = camera.g_camera.exposure_index == idx;
-
-            try std.fmt.format(writer,
-                \\<option value="{1d}" {2s}>{0s}</option>
-            , .{ exposure.description, idx, if (is_selected) "selected" else "" });
-        }
-
-        try std.fmt.format(writer,
-            \\</select>
-        , .{});
-
-        if (is_custom) {
+        if (self.camera.exposure_param == 0xff) {
             try std.fmt.format(writer,
                 \\<input type="text" name="exposure-custom" value="{0d}" required
                 \\  hx-validate="true" min="0" inputmode="numeric"
@@ -526,9 +457,7 @@ const ExposureContent = struct {
             , .{ camera.g_camera.exposure_us, if (camera.g_camera.inputs_enabled()) "" else "disabled" });
         }
 
-        try std.fmt.format(writer,
-            \\</div>
-        , .{});
+        try std.fmt.format(writer, "</div>", .{});
     }
 };
 
@@ -545,17 +474,13 @@ const IsoContent = struct {
             \\  hx-swap="outerHTML" hx-target=".input-iso" {s}>
         , .{if (self.camera.inputs_enabled()) "" else "disabled"});
 
-        for (camera.getIsos(), 0..) |iso, idx| {
-            const is_selected = camera.g_camera.iso_index == idx;
+        const optionsContent: OptionsContent = .{
+            .options = camera.getIsos(),
+            .selected = self.camera.iso_param,
+        };
 
-            try std.fmt.format(writer,
-                \\<option value="{1d}" {2s}>{0s}</option>
-            , .{ iso.description, idx, if (is_selected) "selected" else "" });
-        }
-
-        try std.fmt.format(writer,
-            \\</select>
-        , .{});
+        try std.fmt.format(writer, "{}", .{optionsContent});
+        try std.fmt.format(writer, "</select>", .{});
     }
 };
 
@@ -567,7 +492,7 @@ const InputsContent = struct {
         _ = options;
 
         const delay = Input{
-            .id = "delay",
+            .kind = .delay,
             .value = self.camera.delay_us,
             .enabled = self.camera.inputs_enabled(),
         };
@@ -577,13 +502,13 @@ const InputsContent = struct {
         };
 
         const interval = Input{
-            .id = "interval",
+            .kind = .interval,
             .value = self.camera.interval_us,
             .enabled = self.camera.inputs_enabled(),
         };
 
         const frames = Input{
-            .id = "frames",
+            .kind = .frames,
             .value = self.camera.frames,
             .enabled = self.camera.inputs_enabled(),
         };
@@ -618,6 +543,7 @@ const InputsContent = struct {
         , .{ delay, exposure, interval, frames, iso });
     }
 };
+
 const ActionsContent = struct {
     camera: *const camera.Camera,
 
@@ -684,27 +610,44 @@ const Content = struct {
     }
 };
 
+const IndexContent = struct {
+    camera: *camera.Camera,
+
+    pub fn format(self: *const IndexContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+
+        const content = Content{
+            .camera = self.camera,
+        };
+
+        try std.fmt.format(writer,
+            \\<!doctype html>
+            \\<html lang="en">
+            \\<head>
+            \\  <meta meta="viewport" content="width=device-width, initial-scale=1.0" />
+            \\  <link rel="stylesheet" href="assets/index.css">
+            \\  <script src="assets/htmx.min.js"></script>
+            \\  <script src="assets/index.js"></script>
+            \\</head>
+            \\<body>
+            \\  {}
+            \\</body>
+            \\</html>
+        , .{content});
+    }
+};
+
 fn handle_get_index_html(response: *http.Server.Response) !void {
     var buf: [1024 * 8]u8 = undefined;
 
-    const content = Content{
+    const content = IndexContent{
         .camera = &camera.g_camera,
     };
 
     const formatted = std.fmt.bufPrint(&buf,
-        \\<!doctype html>
-        \\<html lang="en">
-        \\<head>
-        \\  <meta meta="viewport" content="width=device-width, initial-scale=1.0" />
-        \\  <link rel="stylesheet" href="assets/index.css">
-        \\  <script src="assets/htmx.min.js"></script>
-        \\  <script src="assets/index.js"></script>
-        \\</head>
-        \\<body>
-        \\  {}
-        \\</body>
-        \\</html>
-    , .{content}) catch "error";
+        \\{}
+    , .{content}) catch "Error formatting index.html";
 
     try write(response, .ok, formatted);
 }
@@ -718,7 +661,7 @@ fn write(response: *http.Server.Response, status: http.Status, content: []const 
     try response.finish();
 }
 
-fn match(s: []const u8, p: []const u8, caps: [][]const u8) bool {
+fn match_url(s: []const u8, p: []const u8, caps: [][]const u8) bool {
     // comptime check
     // var cap_count: usize = 0;
     // for (p) |ch| {
@@ -785,7 +728,7 @@ fn handleRequest(response: *http.Server.Response) !void {
 
     for (handlers) |handler| {
         var caps: [0][]const u8 = undefined;
-        if (match(response.request.target, handler.endpoint, &caps)) {
+        if (match_url(response.request.target, handler.endpoint, &caps)) {
             try handler.handler(response);
             return;
         }
