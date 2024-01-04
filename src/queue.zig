@@ -1,5 +1,82 @@
 const std = @import("std");
 
+pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
+    const FnType = fn (data: T) anyerror!void;
+
+    const Item = struct {
+        func: *const FnType,
+        data: T,
+    };
+
+    return struct {
+        items: [Size]Item = undefined,
+        size: usize = 0,
+        quit: bool = false,
+        mutex: std.Thread.Mutex = .{},
+        cond: std.Thread.Condition = .{},
+
+        const Self = @This();
+
+        pub fn quitDispatcher(self: *Self) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            self.quit = true;
+            self.cond.signal();
+        }
+
+        pub fn dispatch(self: *Self, comptime func: FnType, data: T) bool {
+            self.mutex.lock();
+
+            const size = self.size;
+
+            defer {
+                self.mutex.unlock();
+
+                if (size != self.size)
+                    self.cond.signal();
+            }
+
+            if (self.size < Size) {
+                self.items[self.size] = .{
+                    .func = func,
+                    .data = data,
+                };
+                self.size += 1;
+                return true;
+            }
+
+            return false;
+        }
+
+        pub fn handler(self: *Self) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            while (!self.quit) {
+                if (self.size > 0 and !self.quit) {
+                    const item = self.items[0];
+
+                    for (1..self.size) |idx| {
+                        self.items[idx - 1] = self.items[idx];
+                    }
+
+                    self.size -= 1;
+
+                    self.mutex.unlock();
+
+                    item.func(item.data) catch unreachable;
+
+                    self.mutex.lock();
+                } else if (!self.quit) {
+                    while (self.size == 0 and !self.quit)
+                        self.cond.wait(&self.mutex);
+                }
+            }
+        }
+    };
+}
+
 /// A thread safe queue
 pub fn Queue(comptime T: type, comptime Size: usize) type {
     const FnType = fn (arg: T) anyerror!void;
@@ -97,52 +174,3 @@ pub fn Queue(comptime T: type, comptime Size: usize) type {
         }
     };
 }
-
-// pub fn AsyncQueue(comptime T: type, comptime Size: usize) type {
-//     const FnType = fn (arg: T) void;
-//
-//     const SlotType = enum(u1) {
-//         Free,
-//         Used,
-//     };
-//
-//     return struct {
-//         queue: Queue(T, Size) = .{},
-//         slots: [Size]SlotType = [1]SlotType{.Free} ** Size,
-//         mutex: std.Thread.Mutex = .{},
-//         cond: std.Thread.Condition = .{},
-//
-//         const Self = @This();
-//
-//         pub fn consume(self: *Self, timeout_ns: u64, comptime callback: FnType) !void {
-//             // if (!self.mutex.tryLock()) return;
-//             self.mutex.lock();
-//             defer self.mutex.unlock();
-//
-//             const nextout = self.queue.nextout;
-//             callback(try self.queue.get(timeout_ns));
-//
-//             self.slots[nextout] = .Free;
-//             self.cond.signal();
-//         }
-//
-//         pub fn postSync(self: *Self, value: T) void {
-//             self.mutex.lock();
-//             defer self.mutex.unlock();
-//
-//             const nextin = self.queue.nextin;
-//             self.queue.put(value);
-//
-//             self.slots[nextin] = .Used;
-//             while (self.slots[nextin] == .Used)
-//                 self.cond.wait(&self.mutex);
-//         }
-//
-//         pub fn postAsync(self: *Self, value: T) void {
-//             self.mutex.lock();
-//             defer self.mutex.unlock();
-//
-//             self.queue.put(value);
-//         }
-//     };
-// }

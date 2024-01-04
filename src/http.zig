@@ -1,5 +1,6 @@
 const std = @import("std");
 const camera = @import("camera.zig");
+const command = @import("command.zig");
 
 const http = std.http;
 
@@ -92,7 +93,7 @@ const Input = struct {
         _ = fmt;
         _ = options;
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<input type="number" name="{0s}" value="{1d}" class="input-{0s}" required hx-validate="true"
             \\ min="0" inputmode="numeric" hx-post="/api/camera/state/{0s}" hx-swap="outerHTML" {2s}/>
         , .{
@@ -120,7 +121,7 @@ fn handle_input_delay(response: *http.Server.Response) anyerror!void {
     const input = Input{
         .kind = .delay,
         .value = camera.g_camera.delay_us,
-        .enabled = camera.g_camera.inputs_enabled(),
+        .enabled = camera.inputsEnabled(),
     };
 
     const formatted = std.fmt.bufPrint(&buf, "{}", .{input}) catch return try write(response, .bad_request, "Cannot format delay");
@@ -201,7 +202,7 @@ fn handle_input_interval(response: *http.Server.Response) !void {
     const input = Input{
         .kind = .interval,
         .value = camera.g_camera.interval_us,
-        .enabled = camera.g_camera.inputs_enabled(),
+        .enabled = camera.inputsEnabled(),
     };
 
     const formatted = std.fmt.bufPrint(&buf, "{}", .{input}) catch return try write(response, .bad_request, "Cannot format interval");
@@ -226,7 +227,7 @@ fn handle_input_frames(response: *http.Server.Response) !void {
     const input = Input{
         .kind = .frames,
         .value = camera.g_camera.frames,
-        .enabled = camera.g_camera.inputs_enabled(),
+        .enabled = camera.inputsEnabled(),
     };
 
     const formatted = std.fmt.bufPrint(&buf, "{}", .{input}) catch return try write(response, .bad_request, "Cannot format frames");
@@ -254,8 +255,21 @@ fn handle_get_state(response: *http.Server.Response) !void {
     try render_content(response, true);
 }
 
+fn executeInit(cmd: camera.Command) void {
+    std.debug.print("Command = {}\n", .{cmd});
+
+    cmd.Initialize.at.store(1, .Release);
+    std.Thread.Futex.wake(cmd.Initialize.at, 1);
+}
+
 fn handle_get_camera(response: *http.Server.Response) !void {
-    camera.g_queue.putAsync(.Initialize);
+    var done = std.atomic.Value(u32).init(0);
+
+    if (!camera.dispatch(.{ .Initialize = .{ .done = &done } }))
+        return try write(response, .bad_request, "Initialize camera");
+
+    while (done.load(.Acquire) == 0)
+        std.Thread.Futex.wait(&done, 0);
 
     var buf: [1024 * 8]u8 = undefined;
 
@@ -269,27 +283,39 @@ fn handle_get_camera(response: *http.Server.Response) !void {
 }
 
 fn handle_camera_connect(response: *http.Server.Response) !void {
-    camera.g_queue.putAsync(.Connect);
+    _ = camera.dispatch(.Connect);
     try render_content(response, false);
 }
 
 fn handle_camera_disconnect(response: *http.Server.Response) !void {
-    camera.g_queue.putAsync(.Disconnect);
+    _ = camera.dispatch(.Disconnect);
     try render_content(response, false);
 }
 
 fn handle_camera_start_shoot(response: *http.Server.Response) !void {
-    camera.g_queue.putSync(.StartShooting);
+    var done = std.atomic.Value(u32).init(0);
+
+    _ = camera.dispatch(.{ .StartShooting = .{ .done = &done } });
+
+    while (done.load(.Acquire) == 0)
+        std.Thread.Futex.wait(&done, 0);
+
     try render_content(response, false);
 }
 
 fn handle_camera_stop_shoot(response: *http.Server.Response) !void {
-    camera.g_queue.putAsync(.StopShooting);
+    _ = camera.dispatch(.StopShooting);
     try render_content(response, false);
 }
 
 fn handle_camera_take_picture(response: *http.Server.Response) !void {
-    camera.g_queue.putSync(.TakePicture);
+    var done = std.atomic.Value(u32).init(0);
+
+    _ = camera.dispatch(.{ .TakePicture = .{ .done = &done } });
+
+    while (done.load(.Acquire) == 0)
+        std.Thread.Futex.wait(&done, 0);
+
     try render_content(response, false);
 }
 
@@ -364,7 +390,7 @@ const OptionsContent = struct {
         if (self.custom) |custom| {
             const is_custom = self.selected == custom.eds_param;
 
-            try std.fmt.format(writer,
+            try writer.print(
                 \\<option value="{1d}" {2s}>{0s}</option>
             , .{ custom.description, custom.eds_param, if (is_custom) "selected" else "" });
         }
@@ -372,7 +398,7 @@ const OptionsContent = struct {
         for (self.options) |option| {
             const is_selected = self.selected == option.eds_param;
 
-            try std.fmt.format(writer,
+            try writer.print(
                 \\<option value="{1d}" {2s}>{0s}</option>
             , .{ option.description, option.eds_param, if (is_selected) "selected" else "" });
         }
@@ -386,11 +412,11 @@ const CameraContent = struct {
         _ = fmt;
         _ = options;
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<div class="content camera">
         , .{});
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<fieldset>
             \\  <legent>Camera</legend>
             \\  <input name="camera" type="text" disabled value="{s}" />
@@ -399,24 +425,24 @@ const CameraContent = struct {
 
         if (self.camera.initialized) {
             if (self.camera.connected) {
-                try std.fmt.format(writer,
+                try writer.print(
                     \\<button hx-get="/api/camera/disconnect" hx-target=".content"
                     \\  hx-swap="outerHTML">Disconnect</button>
                 , .{});
             } else {
-                try std.fmt.format(writer,
+                try writer.print(
                     \\<button hx-get="/api/camera/connect" hx-target=".content"
                     \\  hx-swap="outerHTML">Connect</button>
                 , .{});
             }
         } else {
-            try std.fmt.format(writer,
+            try writer.print(
                 \\<button hx-get="/api/camera" hx-target=".content .camera"
                 \\  hx-swap="outerHTML">Refresh</button>
             , .{});
         }
 
-        try std.fmt.format(writer, "</div>", .{});
+        try writer.print("</div>", .{});
     }
 };
 
@@ -427,14 +453,14 @@ const ExposureContent = struct {
         _ = fmt;
         _ = options;
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<div class="input-exposure">
         , .{});
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<select name="exposure" hx-post="/api/camera/state/exposure"
             \\  hx-swap="outerHTML" hx-target=".input-exposure" {s}>
-        , .{if (self.camera.inputs_enabled()) "" else "disabled"});
+        , .{if (camera.inputsEnabled()) "" else "disabled"});
 
         const optionsContent: OptionsContent = .{
             .custom = .{
@@ -445,19 +471,19 @@ const ExposureContent = struct {
             .selected = self.camera.exposure_param,
         };
 
-        try std.fmt.format(writer, "{}", .{optionsContent});
-        try std.fmt.format(writer, "</select>", .{});
+        try writer.print("{}", .{optionsContent});
+        try writer.print("</select>", .{});
 
         if (self.camera.exposure_param == 0xff) {
-            try std.fmt.format(writer,
+            try writer.print(
                 \\<input type="text" name="exposure-custom" value="{0d}" required
                 \\  hx-validate="true" min="0" inputmode="numeric"
                 \\  hx-post="/api/camera/state/exposure"
                 \\  hx-swap="outerHTML" hx-target=".input-exposure" {1s} />
-            , .{ camera.g_camera.exposure_us, if (camera.g_camera.inputs_enabled()) "" else "disabled" });
+            , .{ camera.g_camera.exposure_us, if (camera.inputsEnabled()) "" else "disabled" });
         }
 
-        try std.fmt.format(writer, "</div>", .{});
+        try writer.print("</div>", .{});
     }
 };
 
@@ -468,19 +494,19 @@ const IsoContent = struct {
         _ = fmt;
         _ = options;
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<select class="input-iso" name="iso"
             \\  hx-post="/api/camera/state/iso"
             \\  hx-swap="outerHTML" hx-target=".input-iso" {s}>
-        , .{if (self.camera.inputs_enabled()) "" else "disabled"});
+        , .{if (camera.inputsEnabled()) "" else "disabled"});
 
         const optionsContent: OptionsContent = .{
             .options = camera.getIsos(),
             .selected = self.camera.iso_param,
         };
 
-        try std.fmt.format(writer, "{}", .{optionsContent});
-        try std.fmt.format(writer, "</select>", .{});
+        try writer.print("{}", .{optionsContent});
+        try writer.print("</select>", .{});
     }
 };
 
@@ -494,7 +520,7 @@ const InputsContent = struct {
         const delay = Input{
             .kind = .delay,
             .value = self.camera.delay_us,
-            .enabled = self.camera.inputs_enabled(),
+            .enabled = camera.inputsEnabled(),
         };
 
         const exposure = ExposureContent{
@@ -504,20 +530,20 @@ const InputsContent = struct {
         const interval = Input{
             .kind = .interval,
             .value = self.camera.interval_us,
-            .enabled = self.camera.inputs_enabled(),
+            .enabled = camera.inputsEnabled(),
         };
 
         const frames = Input{
             .kind = .frames,
             .value = self.camera.frames,
-            .enabled = self.camera.inputs_enabled(),
+            .enabled = camera.inputsEnabled(),
         };
 
         const iso = IsoContent{
             .camera = self.camera,
         };
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<div class="content inputs">
             \\  <fieldset>
             \\    <legend>Delay (seconds)</legend>
@@ -551,14 +577,14 @@ const ActionsContent = struct {
         _ = fmt;
         _ = options;
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<div class="content actions">
         , .{});
 
         {
             const enabled = self.camera.initialized and self.camera.connected and !self.camera.shooting;
 
-            try std.fmt.format(writer,
+            try writer.print(
                 \\<button hx-post="/api/camera/start-shoot"
                 \\ hx-target=".content" hx-swap="outerHTML" {s}>Start</button>
             , .{if (!enabled) "disabled" else ""});
@@ -567,7 +593,7 @@ const ActionsContent = struct {
         {
             const enabled = self.camera.initialized and self.camera.connected and self.camera.shooting;
 
-            try std.fmt.format(writer,
+            try writer.print(
                 \\<button hx-post="/api/camera/stop-shoot"
                 \\ hx-target=".content" hx-swap="outerHTML" {s}>Stop</button>
             , .{if (!enabled) "disabled" else ""});
@@ -576,13 +602,13 @@ const ActionsContent = struct {
         {
             const enabled = self.camera.initialized and self.camera.connected and !self.camera.shooting;
 
-            try std.fmt.format(writer,
+            try writer.print(
                 \\<button hx-post="/api/camera/take-picture"
                 \\ hx-target=".content" hx-swap="outerHTML" {s}>Take Picture</button>
             , .{if (!enabled) "disabled" else ""});
         }
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\</div>
         , .{});
     }
@@ -604,7 +630,7 @@ const Content = struct {
         const inputContent = InputsContent{ .camera = self.camera };
         const actionsContent = ActionsContent{ .camera = self.camera };
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<div class="content" {0s}>{1}{2}{3}</div>
         , .{ refresh, cameraContent, inputContent, actionsContent });
     }
@@ -621,7 +647,7 @@ const IndexContent = struct {
             .camera = self.camera,
         };
 
-        try std.fmt.format(writer,
+        try writer.print(
             \\<!doctype html>
             \\<html lang="en">
             \\<head>

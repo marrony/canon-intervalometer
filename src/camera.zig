@@ -1,54 +1,22 @@
 const std = @import("std");
+const edsk = @import("edsdk.zig");
+const c = edsk.c;
 const queue = @import("queue.zig");
+const command = @import("command.zig");
 const log = std.log.scoped(.camera);
-
-const edsdk = @cImport({
-    @cDefine("__MACOS__", "");
-    @cDefine("__APPLE__", "");
-    //@cDefine("TARGET_OS_LINUX", "");
-    @cInclude("stdbool.h");
-    @cInclude("EDSDK.h");
-});
-
-const CommandErr = error{
-    InitErr,
-    CameraErr,
-};
 
 pub const Option = struct {
     description: []const u8,
     eds_param: u32,
 };
 
-const Command = union(enum) {
-    Null: void,
-    Initialize: void,
-    Deinitialize: void,
-    Connect: void,
-    Disconnect: void,
-    TakePicture: void,
-    StartShooting: void,
-    StopShooting: void,
-    Terminate: void,
-
-    pub fn execute(cmd: Command) CommandErr!void {
-        switch (cmd) {
-            .Null => log.info("Null", .{}),
-            .Initialize => try g_camera.initializeCamera(),
-            .Deinitialize => try g_camera.deinitializeCamera(),
-            .Connect => try g_camera.connect(),
-            .Disconnect => try g_camera.disconnect(),
-            .TakePicture => try g_camera.takePicture(),
-            .StartShooting => try g_camera.startShooting(),
-            .StopShooting => try g_camera.stopShooting(),
-            .Terminate => try g_camera.terminate(),
-            //else => @panic("What?"),
-        }
-    }
+const CameraErr = error{
+    InitErr,
+    CameraErr,
 };
 
 pub const Camera = struct {
-    camera: edsdk.EdsCameraRef = undefined,
+    camera: c.EdsCameraRef = undefined,
     running: bool,
     iso_param: u32,
     exposure_param: u32,
@@ -61,286 +29,12 @@ pub const Camera = struct {
     connected: bool,
     shooting: bool,
     description: [256]u8 = undefined,
-
-    pub fn inputs_enabled(self: *const Camera) bool {
-        return self.initialized and self.connected and !self.shooting;
-    }
-
-    pub fn initializeCamera(self: *Camera) !void {
-        if (self.initialized)
-            return;
-
-        if (edsdk.EdsInitializeSDK() != edsdk.EDS_ERR_OK)
-            return CommandErr.InitErr;
-
-        self.initialized = true;
-
-        self.detectConnectedCamera() catch try self.deinitializeCamera();
-    }
-
-    pub fn deinitializeCamera(self: *Camera) !void {
-        self.initialized = false;
-
-        if (edsdk.EdsTerminateSDK() != edsdk.EDS_ERR_OK)
-            return CommandErr.InitErr;
-    }
-
-    pub fn connect(self: *Camera) !void {
-        if (self.connected)
-            return;
-
-        errdefer {
-            self.deinitializeCamera() catch {};
-        }
-
-        if (edsdk.EdsOpenSession(self.camera) != edsdk.EDS_ERR_OK) {
-            try self.deinitializeCamera();
-            return CommandErr.CameraErr;
-        }
-
-        self.connected = true;
-        try self.filterExposures();
-        try self.filterIsos();
-        //self.lockUI();
-        try self.updateExposure();
-        try self.updateIsoSpeed();
-    }
-
-    pub fn disconnect(self: *Camera) !void {
-        if (!self.connected)
-            return;
-
-        //self.unlockUI();
-
-        if (edsdk.EdsCloseSession(self.camera) != edsdk.EDS_ERR_OK) {
-            try self.deinitializeCamera();
-            return CommandErr.CameraErr;
-        }
-
-        self.connected = false;
-    }
-
-    pub fn terminate(self: *Camera) !void {
-        self.running = false;
-    }
-
-    pub fn takePicture(self: *Camera) !void {
-        if (!self.initialized or !self.connected)
-            return CommandErr.InitErr;
-
-        if (self.exposure_param == 0xff) {
-            try self.pressShutter();
-            std.time.sleep(@as(u64, @intCast(self.exposure_us * std.time.us_per_s)));
-            try self.releaseShutter();
-        } else {
-            try self.pressShutter();
-            try self.releaseShutter();
-        }
-
-        self.frames_taken += 1;
-        if (self.shooting and self.frames_taken < self.frames) {
-            std.time.sleep(@as(u64, @intCast(self.interval_us * std.time.us_per_s)));
-
-            g_queue.putAsync(.TakePicture);
-        } else {
-            self.shooting = false;
-        }
-    }
-
-    pub fn startShooting(self: *Camera) !void {
-        if (!self.initialized or !self.connected)
-            return CommandErr.InitErr;
-
-        self.frames_taken = 0;
-        self.shooting = true;
-
-        try self.updateExposure();
-        try self.updateIsoSpeed();
-
-        if (self.delay_us > 0) {
-            std.time.sleep(@as(u64, @intCast(self.delay_us * std.time.us_per_s)));
-        }
-
-        g_queue.putAsync(.TakePicture);
-    }
-
-    pub fn stopShooting(self: *Camera) !void {
-        self.shooting = false;
-    }
-
-    fn updateExposure(self: *Camera) !void {
-        if (!self.initialized or !self.connected)
-            return CommandErr.InitErr;
-
-        if (self.exposure_param != 0xff) {
-            try self.setExposure(self.exposure_param);
-        } else {
-            try self.setExposure(0x0c);
-        }
-    }
-
-    fn updateIsoSpeed(self: *Camera) !void {
-        if (!self.initialized or !self.connected)
-            return CommandErr.InitErr;
-
-        if (self.iso_param != 0xff) {
-            try self.setIsoSpeed(self.iso_param);
-        } else {
-            try self.setIsoSpeed(0x0);
-        }
-    }
-
-    fn pressShutter(self: *Camera) !void {
-        const err = edsdk.EdsSendCommand(
-            self.camera,
-            edsdk.kEdsCameraCommand_PressShutterButton,
-            edsdk.kEdsCameraCommand_ShutterButton_Completely_NonAF,
-        );
-
-        if (err != edsdk.EDS_ERR_OK)
-            return CommandErr.CameraErr;
-    }
-
-    fn releaseShutter(self: *Camera) !void {
-        const err = edsdk.EdsSendCommand(
-            self.camera,
-            edsdk.kEdsCameraCommand_PressShutterButton,
-            edsdk.kEdsCameraCommand_ShutterButton_OFF,
-        );
-
-        if (err != edsdk.EDS_ERR_OK)
-            return CommandErr.CameraErr;
-    }
-
-    fn setExposure(self: *Camera, exposure: u32) !void {
-        const param: edsdk.EdsUInt32 = exposure;
-
-        const err = edsdk.EdsSetPropertyData(
-            self.camera,
-            edsdk.kEdsPropID_Tv,
-            0,
-            @sizeOf(edsdk.EdsUInt32),
-            &param,
-        );
-
-        if (err != edsdk.EDS_ERR_OK)
-            return CommandErr.CameraErr;
-    }
-
-    fn setIsoSpeed(self: *Camera, isoSpeed: u32) !void {
-        const param: edsdk.EdsUInt32 = isoSpeed;
-
-        const err = edsdk.EdsSetPropertyData(
-            self.camera,
-            edsdk.kEdsPropID_ISOSpeed,
-            0,
-            @sizeOf(edsdk.EdsUInt32),
-            &param,
-        );
-
-        if (err != edsdk.EDS_ERR_OK)
-            return CommandErr.CameraErr;
-    }
-
-    fn filterExposures(self: *Camera) !void {
-        exposures_len = 0;
-
-        var property_desc: edsdk.EdsPropertyDesc = undefined;
-        if (edsdk.EdsGetPropertyDesc(
-            self.camera,
-            edsdk.kEdsPropID_Tv,
-            &property_desc,
-        ) != edsdk.EDS_ERR_OK)
-            return CommandErr.CameraErr;
-
-        const numElements: usize = @intCast(property_desc.numElements);
-        for (0..numElements) |i| {
-            const key = property_desc.propDesc[i];
-
-            for (all_exposures) |exp| {
-                if (exp.eds_param == key) {
-                    exposures[exposures_len] = exp;
-                    exposures_len += 1;
-                    break;
-                }
-            }
-        }
-    }
-
-    fn filterIsos(self: *Camera) !void {
-        isos_len = 0;
-
-        var property_desc: edsdk.EdsPropertyDesc = undefined;
-        if (edsdk.EdsGetPropertyDesc(
-            self.camera,
-            edsdk.kEdsPropID_ISOSpeed,
-            &property_desc,
-        ) != edsdk.EDS_ERR_OK)
-            return CommandErr.CameraErr;
-
-        const numElements: usize = @intCast(property_desc.numElements);
-        for (0..numElements) |i| {
-            const key = property_desc.propDesc[i];
-
-            for (all_isos) |iso| {
-                if (iso.eds_param == key) {
-                    isos[isos_len] = iso;
-                    isos_len += 1;
-                    break;
-                }
-            }
-        }
-    }
-
-    fn detectConnectedCamera(self: *Camera) !void {
-        var camera_list: edsdk.EdsCameraListRef = null;
-
-        defer {
-            if (camera_list != null)
-                _ = edsdk.EdsRelease(camera_list);
-        }
-
-        if (edsdk.EdsGetCameraList(&camera_list) != edsdk.EDS_ERR_OK) {
-            return CommandErr.CameraErr;
-        }
-
-        var count: edsdk.EdsUInt32 = 0;
-
-        if (edsdk.EdsGetChildCount(camera_list, &count) != edsdk.EDS_ERR_OK) {
-            return CommandErr.CameraErr;
-        }
-
-        if (count != 1) {
-            return CommandErr.CameraErr;
-        }
-
-        if (self.camera != null) {
-            _ = edsdk.EdsRelease(self.camera);
-            self.camera = null;
-        }
-
-        var camera_ref: edsdk.EdsCameraRef = null;
-        if (edsdk.EdsGetChildAtIndex(camera_list, 0, &camera_ref) != edsdk.EDS_ERR_OK) {
-            return CommandErr.CameraErr;
-        }
-
-        if (camera_ref == null) {
-            return CommandErr.CameraErr;
-        }
-
-        var device_info: edsdk.EdsDeviceInfo = undefined;
-        if (edsdk.EdsGetDeviceInfo(camera_ref, &device_info) != edsdk.EDS_ERR_OK) {
-            _ = edsdk.EdsRelease(camera_ref);
-            return CommandErr.CameraErr;
-        }
-
-        self.camera = camera_ref;
-        self.description = device_info.szDeviceDescription;
-        // std.mem.copyForwards(u8, self.description[0..], &device_info.szDeviceDescription);
-    }
 };
 
-pub var g_camera = Camera{
+pub const DispatchQueue = queue.DispatchQueue(command.Command, 8);
+
+pub var g_dispatch: DispatchQueue = .{};
+pub var g_camera: Camera = .{
     .running = false,
     .iso_param = 0xff,
     .exposure_param = 0xff,
@@ -354,26 +48,6 @@ pub var g_camera = Camera{
     .shooting = false,
     .description = [1]u8{' '} ** 256,
 };
-
-pub const CommandQueue = queue.Queue(Command, 8);
-
-pub var g_queue: CommandQueue = .{};
-
-pub fn process_commands() void {
-    while (true) {
-        if (g_queue.get(500 * std.time.us_per_s, Command.execute)) {
-            log.info("Consumed", .{});
-        } else |err| switch (err) {
-            error.Timeout => _ = edsdk.EdsGetEvent(),
-            else => {
-                log.err("command error: {}\n", .{err});
-                if (@errorReturnTrace()) |trace| {
-                    std.debug.dumpStackTrace(trace.*);
-                }
-            },
-        }
-    }
-}
 
 const all_exposures = [_]Option{
     .{ .description = "30\"", .eds_param = 0x10 },
@@ -495,10 +169,297 @@ var exposures_len: usize = 0;
 var isos: [all_isos.len]Option = undefined;
 var isos_len: usize = 0;
 
+pub fn dispatch(cmd: command.Command) bool {
+    return g_dispatch.dispatch(command.Command.execute, cmd);
+}
+
 pub fn getExposures() []const Option {
     return exposures[0..exposures_len];
 }
 
 pub fn getIsos() []const Option {
     return isos[0..isos_len];
+}
+
+pub fn inputsEnabled() bool {
+    return g_camera.initialized and g_camera.connected and !g_camera.shooting;
+}
+
+pub fn getEvents() void {
+    if (g_camera.initialized) {
+        _ = c.EdsGetEvent();
+    }
+}
+
+pub fn initializeCamera() !void {
+    if (g_camera.initialized)
+        return;
+
+    if (c.EdsInitializeSDK() != c.EDS_ERR_OK)
+        return CameraErr.InitErr;
+
+    g_camera.initialized = true;
+
+    detectConnectedCamera() catch try deinitializeCamera();
+}
+
+pub fn deinitializeCamera() !void {
+    g_camera.initialized = false;
+
+    if (c.EdsTerminateSDK() != c.EDS_ERR_OK)
+        return CameraErr.InitErr;
+}
+
+pub fn connect() !void {
+    if (g_camera.connected)
+        return;
+
+    errdefer {
+        deinitializeCamera() catch {};
+    }
+
+    if (c.EdsOpenSession(g_camera.camera) != c.EDS_ERR_OK) {
+        try deinitializeCamera();
+        return CameraErr.CameraErr;
+    }
+
+    g_camera.connected = true;
+    try filterExposures();
+    try filterIsos();
+    //lockUI();
+    try updateExposure();
+    try updateIsoSpeed();
+}
+
+pub fn disconnect() !void {
+    if (!g_camera.connected)
+        return;
+
+    //g_camera.unlockUI();
+
+    if (c.EdsCloseSession(g_camera.camera) != c.EDS_ERR_OK) {
+        try deinitializeCamera();
+        return CameraErr.CameraErr;
+    }
+
+    g_camera.connected = false;
+}
+
+pub fn terminate() !void {
+    g_camera.running = false;
+}
+
+pub fn takePicture() !void {
+    if (!g_camera.initialized or !g_camera.connected)
+        return CameraErr.InitErr;
+
+    if (g_camera.exposure_param == 0xff) {
+        try pressShutter();
+        std.time.sleep(@intCast(g_camera.exposure_us * std.time.us_per_s));
+        try releaseShutter();
+    } else {
+        try pressShutter();
+        try releaseShutter();
+    }
+
+    g_camera.frames_taken += 1;
+    if (g_camera.shooting and g_camera.frames_taken < g_camera.frames) {
+        std.time.sleep(@intCast(g_camera.interval_us * std.time.us_per_s));
+
+        _ = dispatch(.{ .TakePicture = .{} });
+    } else {
+        g_camera.shooting = false;
+    }
+}
+
+pub fn startShooting() !void {
+    if (!g_camera.initialized or !g_camera.connected)
+        return CameraErr.InitErr;
+
+    g_camera.frames_taken = 0;
+    g_camera.shooting = true;
+
+    try updateExposure();
+    try updateIsoSpeed();
+
+    if (g_camera.delay_us > 0) {
+        std.time.sleep(@intCast(g_camera.delay_us * std.time.us_per_s));
+    }
+
+    _ = dispatch(.{ .TakePicture = .{} });
+}
+
+pub fn stopShooting() !void {
+    g_camera.shooting = false;
+}
+
+fn updateExposure() !void {
+    if (!g_camera.initialized or !g_camera.connected)
+        return CameraErr.InitErr;
+
+    if (g_camera.exposure_param != 0xff) {
+        try setExposure(g_camera.exposure_param);
+    } else {
+        try setExposure(0x0c);
+    }
+}
+
+fn updateIsoSpeed() !void {
+    if (!g_camera.initialized or !g_camera.connected)
+        return CameraErr.InitErr;
+
+    if (g_camera.iso_param != 0xff) {
+        try setIsoSpeed(g_camera.iso_param);
+    } else {
+        try setIsoSpeed(0x0);
+    }
+}
+
+fn pressShutter() !void {
+    const err = c.EdsSendCommand(
+        g_camera.camera,
+        c.kEdsCameraCommand_PressShutterButton,
+        c.kEdsCameraCommand_ShutterButton_Completely_NonAF,
+    );
+
+    if (err != c.EDS_ERR_OK)
+        return CameraErr.CameraErr;
+}
+
+fn releaseShutter() !void {
+    const err = c.EdsSendCommand(
+        g_camera.camera,
+        c.kEdsCameraCommand_PressShutterButton,
+        c.kEdsCameraCommand_ShutterButton_OFF,
+    );
+
+    if (err != c.EDS_ERR_OK)
+        return CameraErr.CameraErr;
+}
+
+fn setExposure(exposure: u32) !void {
+    const param: c.EdsUInt32 = exposure;
+
+    const err = c.EdsSetPropertyData(
+        g_camera.camera,
+        c.kEdsPropID_Tv,
+        0,
+        @sizeOf(c.EdsUInt32),
+        &param,
+    );
+
+    if (err != c.EDS_ERR_OK)
+        return CameraErr.CameraErr;
+}
+
+fn setIsoSpeed(isoSpeed: u32) !void {
+    const param: c.EdsUInt32 = isoSpeed;
+
+    const err = c.EdsSetPropertyData(
+        g_camera.camera,
+        c.kEdsPropID_ISOSpeed,
+        0,
+        @sizeOf(c.EdsUInt32),
+        &param,
+    );
+
+    if (err != c.EDS_ERR_OK)
+        return CameraErr.CameraErr;
+}
+
+fn filterExposures() !void {
+    exposures_len = 0;
+
+    var property_desc: c.EdsPropertyDesc = undefined;
+    if (c.EdsGetPropertyDesc(
+        g_camera.camera,
+        c.kEdsPropID_Tv,
+        &property_desc,
+    ) != c.EDS_ERR_OK)
+        return CameraErr.CameraErr;
+
+    const numElements: usize = @intCast(property_desc.numElements);
+    for (0..numElements) |i| {
+        const key = property_desc.propDesc[i];
+
+        for (all_exposures) |exp| {
+            if (exp.eds_param == key) {
+                exposures[exposures_len] = exp;
+                exposures_len += 1;
+                break;
+            }
+        }
+    }
+}
+
+fn filterIsos() !void {
+    isos_len = 0;
+
+    var property_desc: c.EdsPropertyDesc = undefined;
+    if (c.EdsGetPropertyDesc(
+        g_camera.camera,
+        c.kEdsPropID_ISOSpeed,
+        &property_desc,
+    ) != c.EDS_ERR_OK)
+        return CameraErr.CameraErr;
+
+    const numElements: usize = @intCast(property_desc.numElements);
+    for (0..numElements) |i| {
+        const key = property_desc.propDesc[i];
+
+        for (all_isos) |iso| {
+            if (iso.eds_param == key) {
+                isos[isos_len] = iso;
+                isos_len += 1;
+                break;
+            }
+        }
+    }
+}
+
+fn detectConnectedCamera() !void {
+    var camera_list: c.EdsCameraListRef = null;
+
+    defer {
+        if (camera_list != null)
+            _ = c.EdsRelease(camera_list);
+    }
+
+    if (c.EdsGetCameraList(&camera_list) != c.EDS_ERR_OK) {
+        return CameraErr.CameraErr;
+    }
+
+    var count: c.EdsUInt32 = 0;
+
+    if (c.EdsGetChildCount(camera_list, &count) != c.EDS_ERR_OK) {
+        return CameraErr.CameraErr;
+    }
+
+    if (count != 1) {
+        return CameraErr.CameraErr;
+    }
+
+    if (g_camera.camera != null) {
+        _ = c.EdsRelease(g_camera.camera);
+        g_camera.camera = null;
+    }
+
+    var camera_ref: c.EdsCameraRef = null;
+    if (c.EdsGetChildAtIndex(camera_list, 0, &camera_ref) != c.EDS_ERR_OK) {
+        return CameraErr.CameraErr;
+    }
+
+    if (camera_ref == null) {
+        return CameraErr.CameraErr;
+    }
+
+    var device_info: c.EdsDeviceInfo = undefined;
+    if (c.EdsGetDeviceInfo(camera_ref, &device_info) != c.EDS_ERR_OK) {
+        _ = c.EdsRelease(camera_ref);
+        return CameraErr.CameraErr;
+    }
+
+    g_camera.camera = camera_ref;
+    g_camera.description = device_info.szDeviceDescription;
+    // std.mem.copyForwards(u8, self.description[0..], &device_info.szDeviceDescription);
 }

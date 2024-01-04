@@ -18,35 +18,31 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{ .path = "src" });
     exe.addIncludePath(.{ .path = "canon-sdk/EDSDK/Header" });
 
-    const sources = &.{
-        "src/camera.c",
-        "src/http.c",
-        "src/main.c",
-        "src/mongoose.c",
-        "src/queue.c",
-        "src/timer.c",
-    };
-    const flags = &.{"-std=gnu17"};
-
-    exe.addCSourceFiles(.{ .files = sources, .flags = flags });
+    // const sources = &.{
+    //     // "src/camera.c",
+    //     // "src/http.c",
+    //     // "src/main.c",
+    //     // "src/mongoose.c",
+    //     // "src/queue.c",
+    //     // "src/timer.c",
+    // };
+    // const flags = &.{"-std=gnu17"};
+    //
+    // exe.addCSourceFiles(.{ .files = sources, .flags = flags });
     exe.linkLibC();
 
-    if (target.isDarwin()) {
-        exe.defineCMacro("__MACOS__", null);
-        exe.defineCMacro("__APPLE__", null);
+    if (target.result.os.tag == .macos) {
         exe.addFrameworkPath(.{ .path = "canon-sdk/EDSDK/Framework" });
         exe.linkFramework("EDSDK");
-        exe.addRPath(.{ .path = "@executable_path/Framework" });
+        exe.addRPathSpecial("@executable_path/Framework");
         //todo: copy Framework folder to /bin preserving symlinks
         b.installDirectory(.{
             .source_dir = .{ .path = "canon-sdk/EDSDK/Framework" },
             .install_dir = .bin,
             .install_subdir = "Framework",
         });
-    } else if (target.isLinux()) {
-        exe.defineCMacro("TARGET_OS_LINUX", null);
-
-        const libDir = switch (target.getCpuArch()) {
+    } else if (target.result.os.tag == .linux) {
+        const libDir = switch (target.result.cpu.arch) {
             .arm => "canon-sdk/EDSDK/Library/ARM32",
             .aarch64 => "canon-sdk/EDSDK/Library/ARM64",
             else => @panic("Unsupported CPU"),
@@ -60,7 +56,7 @@ pub fn build(b: *std.Build) void {
             exe.addRPath(.{ .path = ":." });
         } else {
             exe.linkSystemLibrary(":libEDSDK.so");
-            exe.addRPath(.{ .path = "$ORIGIN" });
+            exe.addRPathSpecial("$ORIGIN");
         }
     } else {
         @panic("OS not supported");
@@ -98,7 +94,7 @@ pub fn build(b: *std.Build) void {
 
 // create a stub .so with the symbols used
 // in the program just to satisfy the linker
-fn linkLibraryHack(b: *std.Build, exe: *std.Build.Step.Compile, target: std.zig.CrossTarget, optimize: std.builtin.Mode) void {
+fn linkLibraryHack(b: *std.Build, exe: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, optimize: std.builtin.Mode) void {
     const lib_EDSDK = b.addSharedLibrary(.{
         .name = "EDSDK",
         .target = target,
