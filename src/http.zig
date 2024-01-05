@@ -52,13 +52,20 @@ const Input = struct {
         _ = options;
 
         try writer.print(
-            \\<input type="number" name="{0s}" value="{1d}" class="input-{0s}" required hx-validate="true"
-            \\ min="0" inputmode="numeric" hx-post="/api/camera/state/{0s}" hx-swap="outerHTML" {2s}/>
+            \\<div class="input-{s}">
+        , .{@tagName(self.kind)});
+
+        try writer.print(
+            \\<input type="number" name="{0s}" value="{1d}" required hx-validate="true"
+            \\ min="0" inputmode="numeric" hx-post="/api/camera/state/{0s}" hx-swap="outerHTML"
+            \\ hx-target=".input-{0s}" {2s}/>
         , .{
             @tagName(self.kind),
             self.value,
             if (self.enabled) "" else "disabled ",
         });
+
+        try writer.print("</div>", .{});
     }
 };
 
@@ -69,8 +76,8 @@ fn handle_input_delay(response: *http.Server.Response) anyerror!void {
     if (std.mem.startsWith(u8, body[0..size], "delay=")) {
         if (std.fmt.parseInt(u32, body["delay=".len..size], 10)) |delay| {
             camera.setDelayTime(delay);
-        } else |_| {
-            return try write(response, .bad_request, "Invalid delay input");
+        } else |err| {
+            return try writeError(response, "Invalid delay input", err);
         }
     }
 
@@ -82,7 +89,9 @@ fn handle_input_delay(response: *http.Server.Response) anyerror!void {
         .enabled = camera.inputsEnabled(),
     };
 
-    const formatted = std.fmt.bufPrint(&buf, "{}", .{input}) catch return try write(response, .bad_request, "Cannot format delay");
+    const formatted = std.fmt.bufPrint(&buf, "{}", .{input}) catch |err| {
+        return try writeError(response, "Cannot format delay", err);
+    };
 
     try write(response, .ok, formatted);
 }
@@ -91,19 +100,11 @@ fn handle_input_iso(response: *http.Server.Response) !void {
     var body: [32]u8 = undefined;
     const size = try response.readAll(&body);
 
-    log.info("Iso = {s}", .{body[0..size]});
-
     if (std.mem.startsWith(u8, body[0..size], "iso=")) {
-        log.info("Iso = {s}", .{body["iso=".len..size]});
-
         if (std.fmt.parseInt(u32, body["iso=".len..size], 10)) |iso_param| {
             camera.setIsoParam(iso_param);
         } else |err| {
-            var errorMsg: [64]u8 = undefined;
-
-            const fmt = try std.fmt.bufPrint(errorMsg[0..], "Invalid ISO input, err = {s}", .{@errorName(err)});
-
-            return try write(response, .bad_request, fmt);
+            return try writeError(response, "Invalid ISO input", err);
         }
     }
 
@@ -112,11 +113,7 @@ fn handle_input_iso(response: *http.Server.Response) !void {
     const iso: IsoContent = .{};
 
     const formatted = std.fmt.bufPrint(&buf, "{}", .{iso}) catch |err| {
-        var errorMsg: [64]u8 = undefined;
-
-        const fmt = try std.fmt.bufPrint(errorMsg[0..], "Cannot format ISO, err = {s}", .{@errorName(err)});
-
-        return try write(response, .bad_request, fmt);
+        return try writeError(response, "Cannot format ISO", err);
     };
 
     try write(response, .ok, formatted);
@@ -129,16 +126,16 @@ fn handle_input_exposure(response: *http.Server.Response) !void {
     if (std.mem.startsWith(u8, body[0..size], "exposure=")) {
         if (std.fmt.parseInt(u32, body["exposure=".len..size], 10)) |exposure_param| {
             camera.setExposureParam(exposure_param);
-        } else |_| {
-            return try write(response, .bad_request, "Invalid exposure input");
+        } else |err| {
+            return try writeError(response, "Invalid exposure input", err);
         }
     }
 
     if (std.mem.startsWith(u8, body[0..size], "exposure-custom=")) {
         if (std.fmt.parseInt(u32, body["exposure-custom=".len..size], 10)) |exposure| {
             camera.setExposureTime(exposure);
-        } else |_| {
-            return try write(response, .bad_request, "Invalid exposure input");
+        } else |err| {
+            return try writeError(response, "Invalid exposure input", err);
         }
     }
 
@@ -146,7 +143,9 @@ fn handle_input_exposure(response: *http.Server.Response) !void {
 
     const exposure: ExposureContent = .{};
 
-    const formatted = std.fmt.bufPrint(&buf, "{}", .{exposure}) catch return try write(response, .bad_request, "Cannot format exposure");
+    const formatted = std.fmt.bufPrint(&buf, "{}", .{exposure}) catch |err| {
+        return try writeError(response, "Cannot format exposure", err);
+    };
 
     try write(response, .ok, formatted);
 }
@@ -158,8 +157,8 @@ fn handle_input_interval(response: *http.Server.Response) !void {
     if (std.mem.startsWith(u8, body[0..size], "interval=")) {
         if (std.fmt.parseInt(u32, body["interval=".len..size], 10)) |interval| {
             camera.setIntervalTime(interval);
-        } else |_| {
-            return try write(response, .bad_request, "Invalid interval input");
+        } else |err| {
+            return try writeError(response, "Invalid interval input", err);
         }
     }
 
@@ -171,7 +170,9 @@ fn handle_input_interval(response: *http.Server.Response) !void {
         .enabled = camera.inputsEnabled(),
     };
 
-    const formatted = std.fmt.bufPrint(&buf, "{}", .{input}) catch return try write(response, .bad_request, "Cannot format interval");
+    const formatted = std.fmt.bufPrint(&buf, "{}", .{input}) catch |err| {
+        return try writeError(response, "Cannot format interval", err);
+    };
 
     try write(response, .ok, formatted);
 }
@@ -183,8 +184,8 @@ fn handle_input_frames(response: *http.Server.Response) !void {
     if (std.mem.startsWith(u8, body[0..size], "frames=")) {
         if (std.fmt.parseInt(u32, body["frames=".len..size], 10)) |frames| {
             camera.setFrames(frames);
-        } else |_| {
-            return try write(response, .bad_request, "Invalid frames input");
+        } else |err| {
+            return try writeError(response, "Invalid frames input", err);
         }
     }
 
@@ -196,7 +197,9 @@ fn handle_input_frames(response: *http.Server.Response) !void {
         .enabled = camera.inputsEnabled(),
     };
 
-    const formatted = std.fmt.bufPrint(&buf, "{}", .{input}) catch return try write(response, .bad_request, "Cannot format frames");
+    const formatted = std.fmt.bufPrint(&buf, "{}", .{input}) catch |err| {
+        return try writeError(response, "Cannot format frames", err);
+    };
 
     try write(response, .ok, formatted);
 }
@@ -209,7 +212,7 @@ fn render_content(response: *http.Server.Response, no_content: bool) !void {
 
         const content: Content = .{};
 
-        const formatted = std.fmt.bufPrint(&buf, "{}", .{content}) catch return try write(response, .bad_request, "Cannot format frames");
+        const formatted = std.fmt.bufPrint(&buf, "{}", .{content}) catch return try write(response, .bad_request, "Cannot render content");
 
         try write(response, .ok, formatted);
     }
@@ -221,42 +224,42 @@ fn handle_get_state(response: *http.Server.Response) !void {
 
 fn handle_get_camera(response: *http.Server.Response) !void {
     if (!camera.dispatchBlocking(.Initialize))
-        return try write(response, .bad_request, "Initialize camera");
+        return try write(response, .bad_request, "Cannot initialize camera");
 
-    var buf: [1024 * 8]u8 = undefined;
-
-    const content: CameraContent = .{};
-
-    const formatted = std.fmt.bufPrint(&buf, "{}", .{content}) catch return try write(response, .bad_request, "Cannot format camera");
-
-    try write(response, .ok, formatted);
+    try render_content(response, false);
 }
 
 fn handle_camera_connect(response: *http.Server.Response) !void {
-    _ = camera.dispatchBlocking(.Connect);
+    if (!camera.dispatchBlocking(.Connect))
+        return try write(response, .bad_request, "Cannot connect to camera");
 
     try render_content(response, false);
 }
 
 fn handle_camera_disconnect(response: *http.Server.Response) !void {
-    _ = camera.dispatchBlocking(.Disconnect);
+    if (!camera.dispatchBlocking(.Disconnect))
+        return try write(response, .bad_request, "Cannot disconnect from camera");
 
     try render_content(response, false);
 }
 
 fn handle_camera_start_shoot(response: *http.Server.Response) !void {
-    _ = camera.dispatchBlocking(.StartShooting);
+    if (!camera.dispatchBlocking(.StartShooting))
+        return try write(response, .bad_request, "Cannot start shooting");
 
     try render_content(response, false);
 }
 
 fn handle_camera_stop_shoot(response: *http.Server.Response) !void {
-    _ = camera.dispatchAsync(.StopShooting);
+    if (!camera.dispatchAsync(.StopShooting))
+        return try write(response, .bad_request, "Cannot stop shooting");
+
     try render_content(response, false);
 }
 
 fn handle_camera_take_picture(response: *http.Server.Response) !void {
-    _ = camera.dispatchBlocking(.TakePicture);
+    if (!camera.dispatchBlocking(.TakePicture))
+        return try write(response, .bad_request, "Cannot take picture");
 
     try render_content(response, false);
 }
@@ -368,7 +371,7 @@ const CameraContent = struct {
             }
         } else {
             try writer.print(
-                \\<button hx-get="/api/camera" hx-target=".content .camera"
+                \\<button hx-get="/api/camera" hx-target=".content"
                 \\  hx-swap="outerHTML">Refresh</button>
             , .{});
         }
@@ -424,7 +427,11 @@ const IsoContent = struct {
         _ = options;
 
         try writer.print(
-            \\<select class="input-iso" name="iso"
+            \\<div class="input-iso">
+        , .{});
+
+        try writer.print(
+            \\<select name="iso"
             \\  hx-post="/api/camera/state/iso"
             \\  hx-swap="outerHTML" hx-target=".input-iso" {s}>
         , .{if (camera.inputsEnabled()) "" else "disabled"});
@@ -436,6 +443,8 @@ const IsoContent = struct {
 
         try writer.print("{}", .{optionsContent});
         try writer.print("</select>", .{});
+
+        try writer.print("</div>", .{});
     }
 };
 
@@ -471,7 +480,7 @@ const InputsContent = struct {
             \\<div class="content inputs">
             \\  <fieldset>
             \\    <legend>Delay (seconds)</legend>
-            \\    <div>{0}</div>
+            \\    <div class="delay">{0}</div>
             \\  </fieldset>
             \\  <fieldset>
             \\    <legend>Exposure (seconds)</legend>
@@ -588,9 +597,9 @@ fn handle_get_index_html(response: *http.Server.Response) !void {
 
     const content: IndexContent = .{};
 
-    const formatted = std.fmt.bufPrint(&buf,
-        \\{}
-    , .{content}) catch "Error formatting index.html";
+    const formatted = std.fmt.bufPrint(&buf, "{}", .{content}) catch |err| {
+        return try writeError(response, "Error formatting index.html", err);
+    };
 
     try write(response, .ok, formatted);
 }
@@ -602,6 +611,12 @@ fn write(response: *http.Server.Response, status: http.Status, content: []const 
     try response.send();
     try response.writeAll(content);
     try response.finish();
+}
+
+fn writeError(response: *http.Server.Response, msg: []const u8, err: anyerror) !void {
+    var buffer: [128]u8 = undefined;
+    const content = try std.fmt.bufPrint(buffer[0..], "{s}: {s}", .{ msg, @errorName(err) });
+    try write(response, .bad_request, content);
 }
 
 fn match_url(s: []const u8, p: []const u8, caps: [][]const u8) bool {
