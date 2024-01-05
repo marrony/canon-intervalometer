@@ -3,9 +3,26 @@ const std = @import("std");
 pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
     const FnType = fn (data: T) anyerror!void;
 
+    const Token = std.atomic.Value(u32);
+
+    const _SyncToken = struct {
+        done: Token = Token.init(0),
+
+        pub fn unlock(self: *@This()) void {
+            self.done.store(1, .Release);
+            std.Thread.Futex.wake(&self.done, 1);
+        }
+
+        pub fn wait(self: *@This()) void {
+            while (self.done.load(.Acquire) == 0)
+                std.Thread.Futex.wait(&self.done, 0);
+        }
+    };
+
     const Item = struct {
         func: *const FnType,
         data: T,
+        token: ?*_SyncToken,
     };
 
     return struct {
@@ -17,6 +34,8 @@ pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
 
         const Self = @This();
 
+        pub const SyncToken = _SyncToken;
+
         pub fn quitDispatcher(self: *Self) void {
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -25,7 +44,7 @@ pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
             self.cond.signal();
         }
 
-        pub fn dispatch(self: *Self, comptime func: FnType, data: T) bool {
+        pub fn dispatch(self: *Self, comptime func: FnType, data: T, token: ?*SyncToken) bool {
             self.mutex.lock();
 
             const size = self.size;
@@ -41,6 +60,7 @@ pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
                 self.items[self.size] = .{
                     .func = func,
                     .data = data,
+                    .token = token,
                 };
                 self.size += 1;
                 return true;
@@ -66,6 +86,10 @@ pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
                     self.mutex.unlock();
 
                     item.func(item.data) catch unreachable;
+
+                    if (item.token) |token| {
+                        token.unlock();
+                    }
 
                     self.mutex.lock();
                 } else if (!self.quit) {

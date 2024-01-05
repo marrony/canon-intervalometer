@@ -220,13 +220,8 @@ fn handle_get_state(response: *http.Server.Response) !void {
 }
 
 fn handle_get_camera(response: *http.Server.Response) !void {
-    var done = std.atomic.Value(u32).init(0);
-
-    if (!camera.dispatch(.{ .Initialize = .{ .done = &done } }))
+    if (!camera.dispatchBlocking(.Initialize))
         return try write(response, .bad_request, "Initialize camera");
-
-    while (done.load(.Acquire) == 0)
-        std.Thread.Futex.wait(&done, 0);
 
     var buf: [1024 * 8]u8 = undefined;
 
@@ -238,38 +233,30 @@ fn handle_get_camera(response: *http.Server.Response) !void {
 }
 
 fn handle_camera_connect(response: *http.Server.Response) !void {
-    _ = camera.dispatch(.Connect);
+    _ = camera.dispatchBlocking(.Connect);
+
     try render_content(response, false);
 }
 
 fn handle_camera_disconnect(response: *http.Server.Response) !void {
-    _ = camera.dispatch(.Disconnect);
+    _ = camera.dispatchBlocking(.Disconnect);
+
     try render_content(response, false);
 }
 
 fn handle_camera_start_shoot(response: *http.Server.Response) !void {
-    var done = std.atomic.Value(u32).init(0);
-
-    _ = camera.dispatch(.{ .StartShooting = .{ .done = &done } });
-
-    while (done.load(.Acquire) == 0)
-        std.Thread.Futex.wait(&done, 0);
+    _ = camera.dispatchBlocking(.StartShooting);
 
     try render_content(response, false);
 }
 
 fn handle_camera_stop_shoot(response: *http.Server.Response) !void {
-    _ = camera.dispatch(.StopShooting);
+    _ = camera.dispatchAsync(.StopShooting);
     try render_content(response, false);
 }
 
 fn handle_camera_take_picture(response: *http.Server.Response) !void {
-    var done = std.atomic.Value(u32).init(0);
-
-    _ = camera.dispatch(.{ .TakePicture = .{ .done = &done } });
-
-    while (done.load(.Acquire) == 0)
-        std.Thread.Futex.wait(&done, 0);
+    _ = camera.dispatchBlocking(.TakePicture);
 
     try render_content(response, false);
 }

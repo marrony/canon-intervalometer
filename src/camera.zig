@@ -169,8 +169,15 @@ var exposures_len: usize = 0;
 var isos: [all_isos.len]Option = undefined;
 var isos_len: usize = 0;
 
-pub fn dispatch(cmd: command.Command) bool {
-    return g_dispatch.dispatch(command.Command.execute, cmd);
+pub fn dispatchAsync(cmd: command.Command) bool {
+    return g_dispatch.dispatch(command.Command.execute, cmd, null);
+}
+
+pub fn dispatchBlocking(cmd: command.Command) bool {
+    var token: DispatchQueue.SyncToken = .{};
+    defer token.wait();
+
+    return g_dispatch.dispatch(command.Command.execute, cmd, &token);
 }
 
 pub fn getExposures() []const Option {
@@ -190,7 +197,7 @@ pub fn isDetected() bool {
 }
 
 pub fn description() []const u8 {
-    return &g_camera.description;
+    return std.mem.sliceTo(&g_camera.description, 0);
 }
 
 pub fn isConnected() bool {
@@ -339,8 +346,8 @@ fn detectConnectedCamera() !void {
     log.info("camera detected", .{});
     g_camera.camera = camera_ref;
     g_camera.description = device_info.szDeviceDescription;
-    // std.mem.copyForwards(u8, self.description[0..], &device_info.szDeviceDescription);
 }
+
 pub fn connect() !void {
     if (g_camera.connected)
         return;
@@ -391,7 +398,7 @@ pub fn takePicture() !void {
     if (g_camera.shooting and g_camera.frames_taken < g_camera.frames) {
         std.time.sleep(@intCast(g_camera.interval_us * std.time.us_per_s));
 
-        _ = dispatch(.{ .TakePicture = .{} });
+        _ = dispatchAsync(.TakePicture);
     } else {
         g_camera.shooting = false;
     }
@@ -411,7 +418,7 @@ pub fn startShooting() !void {
         std.time.sleep(@intCast(g_camera.delay_us * std.time.us_per_s));
     }
 
-    _ = dispatch(.{ .TakePicture = .{} });
+    _ = dispatchAsync(.TakePicture);
 }
 
 pub fn stopShooting() !void {
