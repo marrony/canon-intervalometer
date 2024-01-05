@@ -34,7 +34,7 @@ pub const Camera = struct {
 pub const DispatchQueue = queue.DispatchQueue(command.Command, 8);
 
 pub var g_dispatch: DispatchQueue = .{};
-pub var g_camera: Camera = .{
+var g_camera: Camera = .{
     .running = false,
     .iso_param = 0xff,
     .exposure_param = 0xff,
@@ -185,6 +185,76 @@ pub fn inputsEnabled() bool {
     return g_camera.initialized and g_camera.connected and !g_camera.shooting;
 }
 
+pub fn isDetected() bool {
+    return g_camera.initialized and g_camera.camera != null;
+}
+
+pub fn description() []const u8 {
+    return &g_camera.description;
+}
+
+pub fn isConnected() bool {
+    return g_camera.initialized and g_camera.connected;
+}
+
+pub fn isShooting() bool {
+    return g_camera.shooting;
+}
+
+pub fn getDelay() u32 {
+    return g_camera.delay_us;
+}
+
+pub fn setDelayTime(delay: u32) void {
+    g_camera.delay_us = delay;
+}
+
+pub fn getInterval() u32 {
+    return g_camera.interval_us;
+}
+
+pub fn setIntervalTime(interval: u32) void {
+    g_camera.interval_us = interval;
+}
+
+pub fn getExposure() u32 {
+    return g_camera.exposure_us;
+}
+
+pub fn setExposureTime(exposure: u32) void {
+    g_camera.exposure_us = exposure;
+    g_camera.exposure_param = 0xff;
+}
+
+pub fn setExposureParam(exposure: u32) void {
+    g_camera.exposure_us = 0;
+    g_camera.exposure_param = exposure;
+
+    updateExposure() catch {};
+}
+
+pub fn getExposureParam() u32 {
+    return g_camera.exposure_param;
+}
+
+pub fn getFrames() u32 {
+    return g_camera.frames;
+}
+
+pub fn setFrames(frames: u32) void {
+    g_camera.frames = frames;
+}
+
+pub fn getIsoParam() u32 {
+    return g_camera.iso_param;
+}
+
+pub fn setIsoParam(iso_param: u32) void {
+    g_camera.iso_param = iso_param;
+
+    updateIsoSpeed() catch {};
+}
+
 pub fn getEvents() void {
     if (g_camera.initialized) {
         _ = c.EdsGetEvent();
@@ -200,26 +270,82 @@ pub fn initializeCamera() !void {
 
     g_camera.initialized = true;
 
-    detectConnectedCamera() catch try deinitializeCamera();
+    detectConnectedCamera() catch {};
 }
 
+// just call this function at the end of the program
+// a weird bug in EDSDK is closing fd 0 causing "close failed: Bad file descriptor"
 pub fn deinitializeCamera() !void {
-    g_camera.initialized = false;
+    if (g_camera.camera) |camera| {
+        _ = c.EdsRelease(camera);
+    }
 
-    if (c.EdsTerminateSDK() != c.EDS_ERR_OK)
-        return CameraErr.InitErr;
+    g_camera.camera = null;
+    g_camera.connected = false;
+
+    if (g_camera.initialized) {
+        if (c.EdsTerminateSDK() != c.EDS_ERR_OK)
+            return CameraErr.InitErr;
+        g_camera.initialized = false;
+    }
 }
 
+fn detectConnectedCamera() !void {
+    log.info("detectConnectedCamera", .{});
+
+    var camera_list: c.EdsCameraListRef = null;
+
+    defer {
+        if (camera_list) |list| {
+            _ = c.EdsRelease(list);
+        }
+    }
+
+    if (c.EdsGetCameraList(&camera_list) != c.EDS_ERR_OK) {
+        return CameraErr.CameraErr;
+    }
+
+    var count: c.EdsUInt32 = 0;
+
+    if (c.EdsGetChildCount(camera_list, &count) != c.EDS_ERR_OK) {
+        return CameraErr.CameraErr;
+    }
+
+    if (count != 1) {
+        return CameraErr.CameraErr;
+    }
+
+    if (g_camera.camera) |camera| {
+        _ = c.EdsRelease(camera);
+    }
+
+    g_camera.camera = null;
+
+    var camera_ref: c.EdsCameraRef = null;
+    if (c.EdsGetChildAtIndex(camera_list, 0, &camera_ref) != c.EDS_ERR_OK) {
+        return CameraErr.CameraErr;
+    }
+
+    if (camera_ref == null) {
+        return CameraErr.CameraErr;
+    }
+
+    var device_info: c.EdsDeviceInfo = undefined;
+    if (c.EdsGetDeviceInfo(camera_ref, &device_info) != c.EDS_ERR_OK) {
+        _ = c.EdsRelease(camera_ref);
+        return CameraErr.CameraErr;
+    }
+
+    log.info("camera detected", .{});
+    g_camera.camera = camera_ref;
+    g_camera.description = device_info.szDeviceDescription;
+    // std.mem.copyForwards(u8, self.description[0..], &device_info.szDeviceDescription);
+}
 pub fn connect() !void {
     if (g_camera.connected)
         return;
 
-    errdefer {
-        deinitializeCamera() catch {};
-    }
-
     if (c.EdsOpenSession(g_camera.camera) != c.EDS_ERR_OK) {
-        try deinitializeCamera();
         return CameraErr.CameraErr;
     }
 
@@ -238,7 +364,6 @@ pub fn disconnect() !void {
     //g_camera.unlockUI();
 
     if (c.EdsCloseSession(g_camera.camera) != c.EDS_ERR_OK) {
-        try deinitializeCamera();
         return CameraErr.CameraErr;
     }
 
@@ -415,51 +540,4 @@ fn filterIsos() !void {
             }
         }
     }
-}
-
-fn detectConnectedCamera() !void {
-    var camera_list: c.EdsCameraListRef = null;
-
-    defer {
-        if (camera_list != null)
-            _ = c.EdsRelease(camera_list);
-    }
-
-    if (c.EdsGetCameraList(&camera_list) != c.EDS_ERR_OK) {
-        return CameraErr.CameraErr;
-    }
-
-    var count: c.EdsUInt32 = 0;
-
-    if (c.EdsGetChildCount(camera_list, &count) != c.EDS_ERR_OK) {
-        return CameraErr.CameraErr;
-    }
-
-    if (count != 1) {
-        return CameraErr.CameraErr;
-    }
-
-    if (g_camera.camera != null) {
-        _ = c.EdsRelease(g_camera.camera);
-        g_camera.camera = null;
-    }
-
-    var camera_ref: c.EdsCameraRef = null;
-    if (c.EdsGetChildAtIndex(camera_list, 0, &camera_ref) != c.EDS_ERR_OK) {
-        return CameraErr.CameraErr;
-    }
-
-    if (camera_ref == null) {
-        return CameraErr.CameraErr;
-    }
-
-    var device_info: c.EdsDeviceInfo = undefined;
-    if (c.EdsGetDeviceInfo(camera_ref, &device_info) != c.EDS_ERR_OK) {
-        _ = c.EdsRelease(camera_ref);
-        return CameraErr.CameraErr;
-    }
-
-    g_camera.camera = camera_ref;
-    g_camera.description = device_info.szDeviceDescription;
-    // std.mem.copyForwards(u8, self.description[0..], &device_info.szDeviceDescription);
 }

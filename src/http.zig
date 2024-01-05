@@ -9,48 +9,6 @@ const log = std.log.scoped(.server);
 const server_addr = "0.0.0.0";
 const server_port = 8001;
 
-/// Order of operations
-//             [/ <----------------------------------- \]
-// accept -> wait -> send  [ -> write -> finish][ -> reset /]
-//              \ -> read /
-fn runServer(server: *http.Server) !void {
-    //outer:
-    while (true) {
-        // Accept incoming connection.
-        var response = try server.accept(.{ .allocator = server.allocator });
-        defer {
-            log.info("Deinit response", .{});
-            response.deinit();
-        }
-
-        while (true) {
-            log.info("gonna wait", .{});
-            try response.wait();
-
-            // Handle errors during request processing.
-            // response.wait() catch |err| switch (err) {
-            //     error.HttpHeadersInvalid => {
-            //         log.info("invalid headers", .{});
-            //         continue :outer;
-            //     },
-            //     error.EndOfStream => {
-            //         log.info("end of stream", .{});
-            //         continue;
-            //     },
-            //     else => return err,
-            // };
-
-            // Process the request.
-            try handleRequest(&response);
-
-            if (response.reset() == .closing)
-                break;
-        }
-
-        log.info("Handle Request", .{});
-    }
-}
-
 const HandlerFn = *const fn (response: *http.Server.Response) anyerror!void;
 
 const Handler = struct {
@@ -109,18 +67,18 @@ fn handle_input_delay(response: *http.Server.Response) anyerror!void {
     const size = try response.readAll(&body);
 
     if (std.mem.startsWith(u8, body[0..size], "delay=")) {
-        if (std.fmt.parseUnsigned(u32, body["delay=".len..], 10)) |delay| {
-            camera.g_camera.delay_us = delay;
+        if (std.fmt.parseInt(u32, body["delay=".len..size], 10)) |delay| {
+            camera.setDelayTime(delay);
         } else |_| {
             return try write(response, .bad_request, "Invalid delay input");
         }
     }
 
-    var buf: [1024]u8 = undefined;
+    var buf: [1024 * 2]u8 = undefined;
 
     const input = Input{
         .kind = .delay,
-        .value = camera.g_camera.delay_us,
+        .value = camera.getDelay(),
         .enabled = camera.inputsEnabled(),
     };
 
@@ -133,21 +91,33 @@ fn handle_input_iso(response: *http.Server.Response) !void {
     var body: [32]u8 = undefined;
     const size = try response.readAll(&body);
 
+    log.info("Iso = {s}", .{body[0..size]});
+
     if (std.mem.startsWith(u8, body[0..size], "iso=")) {
-        if (std.fmt.parseUnsigned(u32, body["iso=".len..], 10)) |iso_param| {
-            camera.g_camera.iso_param = iso_param;
-        } else |_| {
-            return try write(response, .bad_request, "Invalid ISO input");
+        log.info("Iso = {s}", .{body["iso=".len..size]});
+
+        if (std.fmt.parseInt(u32, body["iso=".len..size], 10)) |iso_param| {
+            camera.setIsoParam(iso_param);
+        } else |err| {
+            var errorMsg: [64]u8 = undefined;
+
+            const fmt = try std.fmt.bufPrint(errorMsg[0..], "Invalid ISO input, err = {s}", .{@errorName(err)});
+
+            return try write(response, .bad_request, fmt);
         }
     }
 
-    var buf: [1024]u8 = undefined;
+    var buf: [1024 * 2]u8 = undefined;
 
-    const iso = IsoContent{
-        .camera = &camera.g_camera,
+    const iso: IsoContent = .{};
+
+    const formatted = std.fmt.bufPrint(&buf, "{}", .{iso}) catch |err| {
+        var errorMsg: [64]u8 = undefined;
+
+        const fmt = try std.fmt.bufPrint(errorMsg[0..], "Cannot format ISO, err = {s}", .{@errorName(err)});
+
+        return try write(response, .bad_request, fmt);
     };
-
-    const formatted = std.fmt.bufPrint(&buf, "{}", .{iso}) catch return try write(response, .bad_request, "Cannot format ISO");
 
     try write(response, .ok, formatted);
 }
@@ -157,28 +127,24 @@ fn handle_input_exposure(response: *http.Server.Response) !void {
     const size = try response.readAll(&body);
 
     if (std.mem.startsWith(u8, body[0..size], "exposure=")) {
-        if (std.fmt.parseUnsigned(u32, body["exposure=".len..], 10)) |exposure_param| {
-            camera.g_camera.exposure_param = exposure_param;
-            camera.g_camera.exposure_us = 0;
+        if (std.fmt.parseInt(u32, body["exposure=".len..size], 10)) |exposure_param| {
+            camera.setExposureParam(exposure_param);
         } else |_| {
             return try write(response, .bad_request, "Invalid exposure input");
         }
     }
 
     if (std.mem.startsWith(u8, body[0..size], "exposure-custom=")) {
-        if (std.fmt.parseUnsigned(u32, body["exposure-custom=".len..], 10)) |exposure| {
-            camera.g_camera.exposure_us = exposure;
-            camera.g_camera.exposure_param = 0xff;
+        if (std.fmt.parseInt(u32, body["exposure-custom=".len..size], 10)) |exposure| {
+            camera.setExposureTime(exposure);
         } else |_| {
             return try write(response, .bad_request, "Invalid exposure input");
         }
     }
 
-    var buf: [1024]u8 = undefined;
+    var buf: [1024 * 2]u8 = undefined;
 
-    const exposure = ExposureContent{
-        .camera = &camera.g_camera,
-    };
+    const exposure: ExposureContent = .{};
 
     const formatted = std.fmt.bufPrint(&buf, "{}", .{exposure}) catch return try write(response, .bad_request, "Cannot format exposure");
 
@@ -190,18 +156,18 @@ fn handle_input_interval(response: *http.Server.Response) !void {
     const size = try response.readAll(&body);
 
     if (std.mem.startsWith(u8, body[0..size], "interval=")) {
-        if (std.fmt.parseUnsigned(u32, body["interval=".len..], 10)) |interval| {
-            camera.g_camera.interval_us = interval;
+        if (std.fmt.parseInt(u32, body["interval=".len..size], 10)) |interval| {
+            camera.setIntervalTime(interval);
         } else |_| {
             return try write(response, .bad_request, "Invalid interval input");
         }
     }
 
-    var buf: [1024]u8 = undefined;
+    var buf: [1024 * 2]u8 = undefined;
 
     const input = Input{
         .kind = .interval,
-        .value = camera.g_camera.interval_us,
+        .value = camera.getInterval(),
         .enabled = camera.inputsEnabled(),
     };
 
@@ -215,18 +181,18 @@ fn handle_input_frames(response: *http.Server.Response) !void {
     const size = try response.readAll(&body);
 
     if (std.mem.startsWith(u8, body[0..size], "frames=")) {
-        if (std.fmt.parseUnsigned(u32, body["frames=".len..], 10)) |frames| {
-            camera.g_camera.frames = frames;
+        if (std.fmt.parseInt(u32, body["frames=".len..size], 10)) |frames| {
+            camera.setFrames(frames);
         } else |_| {
             return try write(response, .bad_request, "Invalid frames input");
         }
     }
 
-    var buf: [1024]u8 = undefined;
+    var buf: [1024 * 2]u8 = undefined;
 
     const input = Input{
         .kind = .frames,
-        .value = camera.g_camera.frames,
+        .value = camera.getFrames(),
         .enabled = camera.inputsEnabled(),
     };
 
@@ -236,14 +202,12 @@ fn handle_input_frames(response: *http.Server.Response) !void {
 }
 
 fn render_content(response: *http.Server.Response, no_content: bool) !void {
-    if (no_content and camera.g_camera.shooting) {
+    if (no_content and camera.isShooting()) {
         try write(response, .no_content, "No Content");
     } else {
         var buf: [1024 * 8]u8 = undefined;
 
-        const content = Content{
-            .camera = &camera.g_camera,
-        };
+        const content: Content = .{};
 
         const formatted = std.fmt.bufPrint(&buf, "{}", .{content}) catch return try write(response, .bad_request, "Cannot format frames");
 
@@ -253,13 +217,6 @@ fn render_content(response: *http.Server.Response, no_content: bool) !void {
 
 fn handle_get_state(response: *http.Server.Response) !void {
     try render_content(response, true);
-}
-
-fn executeInit(cmd: camera.Command) void {
-    std.debug.print("Command = {}\n", .{cmd});
-
-    cmd.Initialize.at.store(1, .Release);
-    std.Thread.Futex.wake(cmd.Initialize.at, 1);
 }
 
 fn handle_get_camera(response: *http.Server.Response) !void {
@@ -273,9 +230,7 @@ fn handle_get_camera(response: *http.Server.Response) !void {
 
     var buf: [1024 * 8]u8 = undefined;
 
-    const content = CameraContent{
-        .camera = &camera.g_camera,
-    };
+    const content: CameraContent = .{};
 
     const formatted = std.fmt.bufPrint(&buf, "{}", .{content}) catch return try write(response, .bad_request, "Cannot format camera");
 
@@ -345,16 +300,10 @@ fn handle_get_assets(response: *http.Server.Response) !void {
     var web_root = std.fs.openDirAbsolute(web_root_str.?, .{}) catch return try handle_500(response);
     defer web_root.close();
 
-    log.info("Web root = {any}", .{web_root});
-
     const file = web_root.openFile(response.request.target[1..], .{ .mode = .read_only }) catch return try handle_500(response);
     defer file.close();
 
-    log.info("File = {any}", .{file});
-
     const stat = file.stat() catch return try handle_500(response);
-
-    log.info("Stat = {any}", .{stat});
 
     response.transfer_encoding = .{ .content_length = stat.size };
     try response.send();
@@ -371,11 +320,7 @@ fn handle_get_assets(response: *http.Server.Response) !void {
         return try handle_500(response);
     }
 
-    log.info("Done wrting file", .{});
-
     try response.finish();
-
-    log.info("Done finishing reponse", .{});
 }
 
 const OptionsContent = struct {
@@ -406,9 +351,8 @@ const OptionsContent = struct {
 };
 
 const CameraContent = struct {
-    camera: *const camera.Camera,
-
     pub fn format(self: *const CameraContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = self;
         _ = fmt;
         _ = options;
 
@@ -421,17 +365,17 @@ const CameraContent = struct {
             \\  <legent>Camera</legend>
             \\  <input name="camera" type="text" disabled value="{s}" />
             \\</fieldset>
-        , .{if (self.camera.initialized) &self.camera.description else "No cameras detected"});
+        , .{if (camera.isDetected()) camera.description() else "No cameras detected"});
 
-        if (self.camera.initialized) {
-            if (self.camera.connected) {
+        if (camera.isDetected()) {
+            if (camera.isConnected()) {
                 try writer.print(
-                    \\<button hx-get="/api/camera/disconnect" hx-target=".content"
+                    \\<button hx-post="/api/camera/disconnect" hx-target=".content"
                     \\  hx-swap="outerHTML">Disconnect</button>
                 , .{});
             } else {
                 try writer.print(
-                    \\<button hx-get="/api/camera/connect" hx-target=".content"
+                    \\<button hx-post="/api/camera/connect" hx-target=".content"
                     \\  hx-swap="outerHTML">Connect</button>
                 , .{});
             }
@@ -447,9 +391,8 @@ const CameraContent = struct {
 };
 
 const ExposureContent = struct {
-    camera: *const camera.Camera,
-
     pub fn format(self: *const ExposureContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = self;
         _ = fmt;
         _ = options;
 
@@ -468,19 +411,19 @@ const ExposureContent = struct {
                 .eds_param = 0xff,
             },
             .options = camera.getExposures(),
-            .selected = self.camera.exposure_param,
+            .selected = camera.getExposureParam(),
         };
 
         try writer.print("{}", .{optionsContent});
         try writer.print("</select>", .{});
 
-        if (self.camera.exposure_param == 0xff) {
+        if (camera.getExposureParam() == 0xff) {
             try writer.print(
                 \\<input type="text" name="exposure-custom" value="{0d}" required
                 \\  hx-validate="true" min="0" inputmode="numeric"
                 \\  hx-post="/api/camera/state/exposure"
                 \\  hx-swap="outerHTML" hx-target=".input-exposure" {1s} />
-            , .{ camera.g_camera.exposure_us, if (camera.inputsEnabled()) "" else "disabled" });
+            , .{ camera.getExposure(), if (camera.inputsEnabled()) "" else "disabled" });
         }
 
         try writer.print("</div>", .{});
@@ -488,9 +431,8 @@ const ExposureContent = struct {
 };
 
 const IsoContent = struct {
-    camera: *const camera.Camera,
-
     pub fn format(self: *const IsoContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = self;
         _ = fmt;
         _ = options;
 
@@ -502,7 +444,7 @@ const IsoContent = struct {
 
         const optionsContent: OptionsContent = .{
             .options = camera.getIsos(),
-            .selected = self.camera.iso_param,
+            .selected = camera.getIsoParam(),
         };
 
         try writer.print("{}", .{optionsContent});
@@ -511,37 +453,32 @@ const IsoContent = struct {
 };
 
 const InputsContent = struct {
-    camera: *const camera.Camera,
-
     pub fn format(self: *const InputsContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = self;
         _ = fmt;
         _ = options;
 
         const delay = Input{
             .kind = .delay,
-            .value = self.camera.delay_us,
+            .value = camera.getDelay(),
             .enabled = camera.inputsEnabled(),
         };
 
-        const exposure = ExposureContent{
-            .camera = self.camera,
-        };
+        const exposure: ExposureContent = .{};
 
         const interval = Input{
             .kind = .interval,
-            .value = self.camera.interval_us,
+            .value = camera.getInterval(),
             .enabled = camera.inputsEnabled(),
         };
 
         const frames = Input{
             .kind = .frames,
-            .value = self.camera.frames,
+            .value = camera.getFrames(),
             .enabled = camera.inputsEnabled(),
         };
 
-        const iso = IsoContent{
-            .camera = self.camera,
-        };
+        const iso: IsoContent = .{};
 
         try writer.print(
             \\<div class="content inputs">
@@ -571,9 +508,8 @@ const InputsContent = struct {
 };
 
 const ActionsContent = struct {
-    camera: *const camera.Camera,
-
     pub fn format(self: *const ActionsContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = self;
         _ = fmt;
         _ = options;
 
@@ -582,7 +518,7 @@ const ActionsContent = struct {
         , .{});
 
         {
-            const enabled = self.camera.initialized and self.camera.connected and !self.camera.shooting;
+            const enabled = camera.isConnected() and !camera.isShooting();
 
             try writer.print(
                 \\<button hx-post="/api/camera/start-shoot"
@@ -591,7 +527,7 @@ const ActionsContent = struct {
         }
 
         {
-            const enabled = self.camera.initialized and self.camera.connected and self.camera.shooting;
+            const enabled = camera.isConnected() and camera.isShooting();
 
             try writer.print(
                 \\<button hx-post="/api/camera/stop-shoot"
@@ -600,7 +536,7 @@ const ActionsContent = struct {
         }
 
         {
-            const enabled = self.camera.initialized and self.camera.connected and !self.camera.shooting;
+            const enabled = camera.isConnected() and !camera.isShooting();
 
             try writer.print(
                 \\<button hx-post="/api/camera/take-picture"
@@ -615,20 +551,19 @@ const ActionsContent = struct {
 };
 
 const Content = struct {
-    camera: *camera.Camera,
-
     pub fn format(self: *const Content, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = self;
         _ = fmt;
         _ = options;
 
-        const refresh = if (self.camera.shooting)
+        const refresh = if (camera.isShooting())
             \\hx-get="/api/camera/state" hx-swap="outerHTML" hx-trigger="every 2s"
         else
             "";
 
-        const cameraContent = CameraContent{ .camera = self.camera };
-        const inputContent = InputsContent{ .camera = self.camera };
-        const actionsContent = ActionsContent{ .camera = self.camera };
+        const cameraContent: CameraContent = .{};
+        const inputContent: InputsContent = .{};
+        const actionsContent: ActionsContent = .{};
 
         try writer.print(
             \\<div class="content" {0s}>{1}{2}{3}</div>
@@ -637,15 +572,12 @@ const Content = struct {
 };
 
 const IndexContent = struct {
-    camera: *camera.Camera,
-
     pub fn format(self: *const IndexContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = self;
         _ = fmt;
         _ = options;
 
-        const content = Content{
-            .camera = self.camera,
-        };
+        const content: Content = .{};
 
         try writer.print(
             \\<!doctype html>
@@ -667,9 +599,7 @@ const IndexContent = struct {
 fn handle_get_index_html(response: *http.Server.Response) !void {
     var buf: [1024 * 8]u8 = undefined;
 
-    const content = IndexContent{
-        .camera = &camera.g_camera,
-    };
+    const content: IndexContent = .{};
 
     const formatted = std.fmt.bufPrint(&buf,
         \\{}
@@ -767,12 +697,53 @@ fn handleRequest(response: *http.Server.Response) !void {
     try response.finish();
 }
 
+/// Order of operations
+//             [/ <----------------------------------- \]
+// accept -> wait -> send  [ -> write -> finish][ -> reset /]
+//              \ -> read /
+fn runServer(server: *http.Server) !void {
+    outer: while (true) {
+        // Accept incoming connection.
+        var buffer: [1024]u8 = undefined;
+        var response = try server.accept(.{
+            .allocator = server.allocator,
+            .header_strategy = .{ .static = buffer[0..] },
+        });
+        defer response.deinit();
+
+        while (true) {
+            log.info("gonna wait", .{});
+
+            // Handle errors during request processing.
+            response.wait() catch |err| switch (err) {
+                error.HttpHeadersInvalid => {
+                    log.info("invalid headers", .{});
+                    continue :outer;
+                },
+                error.EndOfStream => {
+                    log.info("end of stream", .{});
+                    continue;
+                },
+                else => return err,
+            };
+
+            // Process the request.
+            try handleRequest(&response);
+
+            if (response.reset() == .closing)
+                break;
+        }
+    }
+}
+
 pub fn runHttpServer() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
-    var server = http.Server.init(allocator, .{ .reuse_address = true });
+    var server = http.Server.init(allocator, .{
+        .reuse_address = true,
+    });
     defer server.deinit();
 
     const address = std.net.Address.parseIp(server_addr, server_port) catch unreachable;

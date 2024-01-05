@@ -5,7 +5,7 @@ const command = @import("command.zig");
 
 fn getEvents() void {
     while (!camera.g_dispatch.quit) {
-        _ = camera.g_dispatch.dispatch(command.Command.execute, .GetEvent);
+        _ = camera.dispatch(.GetEvent);
         std.time.sleep(500 * std.time.us_per_s);
     }
 }
