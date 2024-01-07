@@ -35,7 +35,7 @@ pub const DispatchQueue = queue.DispatchQueue(command.Command, 8);
 
 pub var g_dispatch: DispatchQueue = .{};
 var g_camera: Camera = .{
-    .running = false,
+    .running = true,
     .iso_param = 0xff,
     .exposure_param = 0xff,
     .delay_us = 0,
@@ -174,7 +174,7 @@ pub fn dispatchAsync(cmd: command.Command) bool {
 }
 
 pub fn dispatchBlocking(cmd: command.Command) bool {
-    var token: DispatchQueue.SyncToken = .{};
+    var token: queue.SyncToken = .{};
     defer token.wait();
 
     return g_dispatch.dispatch(command.Command.execute, cmd, &token);
@@ -190,6 +190,10 @@ pub fn getIsos() []const Option {
 
 pub fn inputsEnabled() bool {
     return g_camera.initialized and g_camera.connected and !g_camera.shooting;
+}
+
+pub fn isRunning() bool {
+    return g_camera.running;
 }
 
 pub fn isDetected() bool {
@@ -262,10 +266,12 @@ pub fn setIsoParam(iso_param: u32) void {
     updateIsoSpeed() catch {};
 }
 
-pub fn getEvents() void {
-    if (g_camera.initialized) {
-        _ = c.EdsGetEvent();
-    }
+pub fn getEvents() !void {
+    if (g_camera.initialized)
+        return;
+
+    if (c.EdsGetEvent() != c.EDS_ERR_OK)
+        return CameraErr.CameraErr;
 }
 
 pub fn initializeCamera() !void {
@@ -277,7 +283,13 @@ pub fn initializeCamera() !void {
 
     g_camera.initialized = true;
 
-    detectConnectedCamera() catch {};
+    detectConnectedCamera() catch {
+        log.warn("Failure detecting camera", .{});
+    };
+
+    connect() catch {
+        log.warn("Failure connecting to camera", .{});
+    };
 }
 
 // just call this function at the end of the program
@@ -379,6 +391,10 @@ pub fn disconnect() !void {
 
 pub fn terminate() !void {
     g_camera.running = false;
+
+    log.info("quiting dispatcher", .{});
+    g_dispatch.quitDispatcher();
+    log.info("quiting dispatcher", .{});
 }
 
 pub fn takePicture() !void {
@@ -547,4 +563,24 @@ fn filterIsos() !void {
             }
         }
     }
+}
+
+pub fn signalHandler(sig: c_int) callconv(.C) void {
+    //_ = sig;
+    log.info("Signal Handler {}", .{sig});
+    disconnect() catch {};
+    terminate() catch {};
+}
+
+pub fn getEventsThread() void {
+    while (g_camera.running) {
+        _ = dispatchAsync(.GetEvent);
+        std.time.sleep(500 * std.time.us_per_s);
+    }
+    log.info("Stoping events thread", .{});
+}
+
+pub fn processCommands() void {
+    g_dispatch.handler();
+    log.info("Stoping commands thread", .{});
 }

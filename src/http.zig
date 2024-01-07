@@ -704,26 +704,20 @@ fn handleRequest(response: *http.Server.Response) !void {
 // accept -> wait -> send  [ -> write -> finish][ -> reset /]
 //              \ -> read /
 fn runServer(server: *http.Server) !void {
-    outer: while (true) {
+    outer: while (camera.isRunning()) {
         // Accept incoming connection.
-        var buffer: [1024]u8 = undefined;
         var response = try server.accept(.{
             .allocator = server.allocator,
-            .header_strategy = .{ .static = buffer[0..] },
         });
         defer response.deinit();
 
-        while (true) {
-            log.info("gonna wait", .{});
-
+        while (camera.isRunning()) {
             // Handle errors during request processing.
             response.wait() catch |err| switch (err) {
                 error.HttpHeadersInvalid => {
-                    log.info("invalid headers", .{});
                     continue :outer;
                 },
                 error.EndOfStream => {
-                    log.info("end of stream", .{});
                     continue;
                 },
                 else => return err,
@@ -759,4 +753,6 @@ pub fn runHttpServer() !void {
         }
         std.os.exit(1);
     };
+
+    log.info("Stoping http thread", .{});
 }

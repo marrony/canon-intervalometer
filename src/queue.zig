@@ -1,28 +1,28 @@
 const std = @import("std");
 
-pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
-    const FnType = fn (data: T) anyerror!void;
-
+pub const SyncToken = struct {
     const Token = std.atomic.Value(u32);
 
-    const _SyncToken = struct {
-        done: Token = Token.init(0),
+    done: Token = Token.init(0),
 
-        pub fn unlock(self: *@This()) void {
-            self.done.store(1, .Release);
-            std.Thread.Futex.wake(&self.done, 1);
-        }
+    pub fn unlock(self: *@This()) void {
+        self.done.store(1, .Release);
+        std.Thread.Futex.wake(&self.done, 1);
+    }
 
-        pub fn wait(self: *@This()) void {
-            while (self.done.load(.Acquire) == 0)
-                std.Thread.Futex.wait(&self.done, 0);
-        }
-    };
+    pub fn wait(self: *@This()) void {
+        while (self.done.load(.Acquire) == 0)
+            std.Thread.Futex.wait(&self.done, 0);
+    }
+};
+
+pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
+    const FnType = fn (data: T) void;
 
     const Item = struct {
         func: *const FnType,
         data: T,
-        token: ?*_SyncToken,
+        token: ?*SyncToken,
     };
 
     return struct {
@@ -33,8 +33,6 @@ pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
         cond: std.Thread.Condition = .{},
 
         const Self = @This();
-
-        pub const SyncToken = _SyncToken;
 
         pub fn quitDispatcher(self: *Self) void {
             self.mutex.lock();
@@ -85,7 +83,7 @@ pub fn DispatchQueue(comptime T: type, comptime Size: usize) type {
 
                     self.mutex.unlock();
 
-                    item.func(item.data) catch unreachable;
+                    item.func(item.data);
 
                     if (item.token) |token| {
                         token.unlock();

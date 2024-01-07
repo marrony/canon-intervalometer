@@ -13,17 +13,24 @@ pub const Command = union(enum) {
     StopShooting: void,
     Terminate: void,
 
-    pub fn execute(cmd: Command) anyerror!void {
-        switch (cmd) {
+    pub fn execute(cmd: Command) void {
+        const ret = switch (cmd) {
             .GetEvent => camera.getEvents(),
-            .Initialize => try camera.initializeCamera(),
-            .Deinitialize => try camera.deinitializeCamera(),
-            .Connect => try camera.connect(),
-            .Disconnect => try camera.disconnect(),
-            .TakePicture => try camera.takePicture(),
-            .StartShooting => try camera.startShooting(),
-            .StopShooting => try camera.stopShooting(),
-            .Terminate => try camera.terminate(),
-        }
+            .Initialize => camera.initializeCamera(),
+            .Deinitialize => camera.deinitializeCamera(),
+            .Connect => camera.connect(),
+            .Disconnect => camera.disconnect(),
+            .TakePicture => camera.takePicture(),
+            .StartShooting => camera.startShooting(),
+            .StopShooting => camera.stopShooting(),
+            .Terminate => camera.terminate(),
+        };
+
+        ret catch |err| {
+            log.err("command error: {}\n", .{err});
+            if (@errorReturnTrace()) |trace| {
+                std.debug.dumpStackTrace(trace.*);
+            }
+        };
     }
 };
