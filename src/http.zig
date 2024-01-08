@@ -732,27 +732,34 @@ fn runServer(server: *http.Server) !void {
     }
 }
 
-pub fn runHttpServer() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer std.debug.assert(gpa.deinit() == .ok);
-    const allocator = gpa.allocator();
+var server_ptr: ?*http.Server = null;
 
+pub fn stopHttpServer() void {
+    if (server_ptr) |server| {
+        if (server.socket.sockfd) |sockfd| {
+            std.os.shutdown(sockfd, .both) catch {
+                log.info("Failed to shutdown socket", .{});
+                log.info("Forcing exit", .{});
+                std.os.exit(1);
+            };
+        }
+    }
+
+    server_ptr = null;
+}
+
+pub fn runHttpServer(allocator: std.mem.Allocator) !void {
     var server = http.Server.init(allocator, .{
         .reuse_address = true,
     });
     defer server.deinit();
 
+    server_ptr = &server;
+
     const address = std.net.Address.parseIp(server_addr, server_port) catch unreachable;
     try server.listen(address);
 
-    runServer(&server) catch |err| {
-        // Handle server errors.
-        log.err("server error: {}\n", .{err});
-        if (@errorReturnTrace()) |trace| {
-            std.debug.dumpStackTrace(trace.*);
-        }
-        std.os.exit(1);
+    runServer(&server) catch {
+        camera.stopCamera();
     };
-
-    log.info("Stoping http thread", .{});
 }

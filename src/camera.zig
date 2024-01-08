@@ -34,6 +34,7 @@ pub const Camera = struct {
 pub const DispatchQueue = queue.DispatchQueue(command.Command, 8);
 
 pub var g_dispatch: DispatchQueue = .{};
+
 var g_camera: Camera = .{
     .running = true,
     .iso_param = 0xff,
@@ -267,7 +268,7 @@ pub fn setIsoParam(iso_param: u32) void {
 }
 
 pub fn getEvents() !void {
-    if (g_camera.initialized)
+    if (!g_camera.initialized)
         return;
 
     if (c.EdsGetEvent() != c.EDS_ERR_OK)
@@ -392,9 +393,7 @@ pub fn disconnect() !void {
 pub fn terminate() !void {
     g_camera.running = false;
 
-    log.info("quiting dispatcher", .{});
     g_dispatch.quitDispatcher();
-    log.info("quiting dispatcher", .{});
 }
 
 pub fn takePicture() !void {
@@ -565,9 +564,7 @@ fn filterIsos() !void {
     }
 }
 
-pub fn signalHandler(sig: c_int) callconv(.C) void {
-    //_ = sig;
-    log.info("Signal Handler {}", .{sig});
+pub fn stopCamera() callconv(.C) void {
     disconnect() catch {};
     terminate() catch {};
 }
@@ -577,10 +574,8 @@ pub fn getEventsThread() void {
         _ = dispatchAsync(.GetEvent);
         std.time.sleep(500 * std.time.us_per_s);
     }
-    log.info("Stoping events thread", .{});
 }
 
 pub fn processCommands() void {
     g_dispatch.handler();
-    log.info("Stoping commands thread", .{});
 }

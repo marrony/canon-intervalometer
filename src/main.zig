@@ -3,22 +3,34 @@ const http = @import("http.zig");
 const camera = @import("camera.zig");
 const command = @import("command.zig");
 
+const log = std.log.scoped(.main);
+
+fn signalHandler(sig: c_int) callconv(.C) void {
+    _ = sig;
+
+    camera.stopCamera();
+    http.stopHttpServer();
+}
+
+fn installSignalHandler() !void {
+    const sa: std.os.Sigaction = .{
+        .handler = .{ .handler = signalHandler },
+        .flags = std.os.SA.RESTART,
+        .mask = std.os.empty_sigset,
+    };
+
+    try std.os.sigaction(std.os.SIG.INT, &sa, null);
+    try std.os.sigaction(std.os.SIG.TERM, &sa, null);
+}
+
 pub fn main() !void {
-    if (false) {
-        //to enable signal handling I need to find a way
-        //to abort server.accept() on http thread, nonblocking?
+    try installSignalHandler();
 
-        const sa: std.os.Sigaction = .{
-            .handler = .{ .handler = camera.signalHandler },
-            .flags = std.os.SA.RESTART,
-            .mask = std.os.empty_sigset,
-        };
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+    const allocator = gpa.allocator();
 
-        try std.os.sigaction(std.os.SIG.INT, &sa, null);
-        try std.os.sigaction(std.os.SIG.TERM, &sa, null);
-    }
-
-    const httpThread = try std.Thread.spawn(.{}, http.runHttpServer, .{});
+    const httpThread = try std.Thread.spawn(.{}, http.runHttpServer, .{allocator});
     const eventsThread = try std.Thread.spawn(.{}, camera.getEventsThread, .{});
 
     camera.processCommands();
