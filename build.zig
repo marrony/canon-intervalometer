@@ -18,17 +18,6 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{ .path = "src" });
     exe.addIncludePath(.{ .path = "canon-sdk/EDSDK/Header" });
 
-    // const sources = &.{
-    //     // "src/camera.c",
-    //     // "src/http.c",
-    //     // "src/main.c",
-    //     // "src/mongoose.c",
-    //     // "src/queue.c",
-    //     // "src/timer.c",
-    // };
-    // const flags = &.{"-std=gnu17"};
-    //
-    // exe.addCSourceFiles(.{ .files = sources, .flags = flags });
     exe.linkLibC();
 
     if (target.result.os.tag == .macos) {
