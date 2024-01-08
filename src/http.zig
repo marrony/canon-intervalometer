@@ -1,6 +1,7 @@
 const std = @import("std");
 const camera = @import("camera.zig");
 const command = @import("command.zig");
+const html = @import("html.zig");
 
 const http = std.http;
 
@@ -36,39 +37,6 @@ const get_handlers = [_]Handler{
     .{ .endpoint = "/", .handler = handle_get_index_html },
 };
 
-const InputKind = enum {
-    delay,
-    interval,
-    frames,
-};
-
-const Input = struct {
-    kind: InputKind,
-    value: u32,
-    enabled: bool,
-
-    pub fn format(self: *const Input, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
-
-        try writer.print(
-            \\<div class="input-{s}">
-        , .{@tagName(self.kind)});
-
-        try writer.print(
-            \\<input type="number" name="{0s}" value="{1d}" required hx-validate="true"
-            \\ min="0" inputmode="numeric" hx-post="/api/camera/state/{0s}" hx-swap="outerHTML"
-            \\ hx-target=".input-{0s}" {2s}/>
-        , .{
-            @tagName(self.kind),
-            self.value,
-            if (self.enabled) "" else "disabled ",
-        });
-
-        try writer.print("</div>", .{});
-    }
-};
-
 fn handle_input_delay(response: *http.Server.Response) anyerror!void {
     var body: [32]u8 = undefined;
     const size = try response.readAll(&body);
@@ -83,7 +51,7 @@ fn handle_input_delay(response: *http.Server.Response) anyerror!void {
 
     var buf: [1024 * 2]u8 = undefined;
 
-    const input = Input{
+    const input = html.Input{
         .kind = .delay,
         .value = camera.getDelay(),
         .enabled = camera.inputsEnabled(),
@@ -110,7 +78,7 @@ fn handle_input_iso(response: *http.Server.Response) !void {
 
     var buf: [1024 * 2]u8 = undefined;
 
-    const iso: IsoContent = .{};
+    const iso: html.Iso = .{};
 
     const formatted = std.fmt.bufPrint(&buf, "{}", .{iso}) catch |err| {
         return try writeError(response, "Cannot format ISO", err);
@@ -141,7 +109,7 @@ fn handle_input_exposure(response: *http.Server.Response) !void {
 
     var buf: [1024 * 2]u8 = undefined;
 
-    const exposure: ExposureContent = .{};
+    const exposure: html.Exposure = .{};
 
     const formatted = std.fmt.bufPrint(&buf, "{}", .{exposure}) catch |err| {
         return try writeError(response, "Cannot format exposure", err);
@@ -164,7 +132,7 @@ fn handle_input_interval(response: *http.Server.Response) !void {
 
     var buf: [1024 * 2]u8 = undefined;
 
-    const input = Input{
+    const input = html.Input{
         .kind = .interval,
         .value = camera.getInterval(),
         .enabled = camera.inputsEnabled(),
@@ -191,7 +159,7 @@ fn handle_input_frames(response: *http.Server.Response) !void {
 
     var buf: [1024 * 2]u8 = undefined;
 
-    const input = Input{
+    const input = html.Input{
         .kind = .frames,
         .value = camera.getFrames(),
         .enabled = camera.inputsEnabled(),
@@ -210,9 +178,9 @@ fn render_content(response: *http.Server.Response, no_content: bool) !void {
     } else {
         var buf: [1024 * 8]u8 = undefined;
 
-        const content: Content = .{};
+        const body: html.Body = .{};
 
-        const formatted = std.fmt.bufPrint(&buf, "{}", .{content}) catch return try write(response, .bad_request, "Cannot render content");
+        const formatted = std.fmt.bufPrint(&buf, "{}", .{body}) catch return try write(response, .bad_request, "Cannot render content");
 
         try write(response, .ok, formatted);
     }
@@ -301,303 +269,22 @@ fn handle_get_assets(response: *http.Server.Response) !void {
     var buffer: [1024]u8 = undefined;
 
     while (file.readAll(&buffer)) |bytes| {
-        log.info("Writing = {}", .{bytes});
         if (bytes == 0)
             break;
         try response.writeAll(buffer[0..bytes]);
-    } else |err| {
-        log.info("some error {}", .{err});
+    } else |_| {
         return try handle_500(response);
     }
 
     try response.finish();
 }
 
-const OptionsContent = struct {
-    custom: ?camera.Option = null,
-    options: []const camera.Option,
-    selected: u32,
-
-    pub fn format(self: *const OptionsContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
-
-        if (self.custom) |custom| {
-            const is_custom = self.selected == custom.eds_param;
-
-            try writer.print(
-                \\<option value="{1d}" {2s}>{0s}</option>
-            , .{ custom.description, custom.eds_param, if (is_custom) "selected" else "" });
-        }
-
-        for (self.options) |option| {
-            const is_selected = self.selected == option.eds_param;
-
-            try writer.print(
-                \\<option value="{1d}" {2s}>{0s}</option>
-            , .{ option.description, option.eds_param, if (is_selected) "selected" else "" });
-        }
-    }
-};
-
-const CameraContent = struct {
-    pub fn format(self: *const CameraContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = self;
-        _ = fmt;
-        _ = options;
-
-        try writer.print(
-            \\<div class="content camera">
-        , .{});
-
-        try writer.print(
-            \\<fieldset>
-            \\  <legent>Camera</legend>
-            \\  <input name="camera" type="text" disabled value="{s}" />
-            \\</fieldset>
-        , .{if (camera.isDetected()) camera.description() else "No cameras detected"});
-
-        if (camera.isDetected()) {
-            if (camera.isConnected()) {
-                try writer.print(
-                    \\<button hx-post="/api/camera/disconnect" hx-target=".content"
-                    \\  hx-swap="outerHTML">Disconnect</button>
-                , .{});
-            } else {
-                try writer.print(
-                    \\<button hx-post="/api/camera/connect" hx-target=".content"
-                    \\  hx-swap="outerHTML">Connect</button>
-                , .{});
-            }
-        } else {
-            try writer.print(
-                \\<button hx-get="/api/camera" hx-target=".content"
-                \\  hx-swap="outerHTML">Refresh</button>
-            , .{});
-        }
-
-        try writer.print("</div>", .{});
-    }
-};
-
-const ExposureContent = struct {
-    pub fn format(self: *const ExposureContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = self;
-        _ = fmt;
-        _ = options;
-
-        try writer.print(
-            \\<div class="input-exposure">
-        , .{});
-
-        try writer.print(
-            \\<select name="exposure" hx-post="/api/camera/state/exposure"
-            \\  hx-swap="outerHTML" hx-target=".input-exposure" {s}>
-        , .{if (camera.inputsEnabled()) "" else "disabled"});
-
-        const optionsContent: OptionsContent = .{
-            .custom = .{
-                .description = "Custom",
-                .eds_param = 0xff,
-            },
-            .options = camera.getExposures(),
-            .selected = camera.getExposureParam(),
-        };
-
-        try writer.print("{}", .{optionsContent});
-        try writer.print("</select>", .{});
-
-        if (camera.getExposureParam() == 0xff) {
-            try writer.print(
-                \\<input type="text" name="exposure-custom" value="{0d}" required
-                \\  hx-validate="true" min="0" inputmode="numeric"
-                \\  hx-post="/api/camera/state/exposure"
-                \\  hx-swap="outerHTML" hx-target=".input-exposure" {1s} />
-            , .{ camera.getExposure(), if (camera.inputsEnabled()) "" else "disabled" });
-        }
-
-        try writer.print("</div>", .{});
-    }
-};
-
-const IsoContent = struct {
-    pub fn format(self: *const IsoContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = self;
-        _ = fmt;
-        _ = options;
-
-        try writer.print(
-            \\<div class="input-iso">
-        , .{});
-
-        try writer.print(
-            \\<select name="iso"
-            \\  hx-post="/api/camera/state/iso"
-            \\  hx-swap="outerHTML" hx-target=".input-iso" {s}>
-        , .{if (camera.inputsEnabled()) "" else "disabled"});
-
-        const optionsContent: OptionsContent = .{
-            .options = camera.getIsos(),
-            .selected = camera.getIsoParam(),
-        };
-
-        try writer.print("{}", .{optionsContent});
-        try writer.print("</select>", .{});
-
-        try writer.print("</div>", .{});
-    }
-};
-
-const InputsContent = struct {
-    pub fn format(self: *const InputsContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = self;
-        _ = fmt;
-        _ = options;
-
-        const delay = Input{
-            .kind = .delay,
-            .value = camera.getDelay(),
-            .enabled = camera.inputsEnabled(),
-        };
-
-        const exposure: ExposureContent = .{};
-
-        const interval = Input{
-            .kind = .interval,
-            .value = camera.getInterval(),
-            .enabled = camera.inputsEnabled(),
-        };
-
-        const frames = Input{
-            .kind = .frames,
-            .value = camera.getFrames(),
-            .enabled = camera.inputsEnabled(),
-        };
-
-        const iso: IsoContent = .{};
-
-        try writer.print(
-            \\<div class="content inputs">
-            \\  <fieldset>
-            \\    <legend>Delay (seconds)</legend>
-            \\    <div class="delay">{0}</div>
-            \\  </fieldset>
-            \\  <fieldset>
-            \\    <legend>Exposure (seconds)</legend>
-            \\    <div class="exposure">{1}</div>
-            \\  </fieldset>
-            \\  <fieldset>
-            \\    <legend>Interval (seconds)</legend>
-            \\    <div class="interval">{2}</div>
-            \\  </fieldset>
-            \\  <fieldset>
-            \\    <legend>Frames</legend>
-            \\    <div class="frames">{3}</div>
-            \\  </fieldset>
-            \\  <fieldset>
-            \\    <legend>ISO</legend>
-            \\    <div class="iso">{4}</div>
-            \\  </fieldset>
-            \\</div>
-        , .{ delay, exposure, interval, frames, iso });
-    }
-};
-
-const ActionsContent = struct {
-    pub fn format(self: *const ActionsContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = self;
-        _ = fmt;
-        _ = options;
-
-        try writer.print(
-            \\<div class="content actions">
-        , .{});
-
-        {
-            const enabled = camera.isConnected() and !camera.isShooting();
-
-            try writer.print(
-                \\<button hx-post="/api/camera/start-shoot"
-                \\ hx-target=".content" hx-swap="outerHTML" {s}>Start</button>
-            , .{if (!enabled) "disabled" else ""});
-        }
-
-        {
-            const enabled = camera.isConnected() and camera.isShooting();
-
-            try writer.print(
-                \\<button hx-post="/api/camera/stop-shoot"
-                \\ hx-target=".content" hx-swap="outerHTML" {s}>Stop</button>
-            , .{if (!enabled) "disabled" else ""});
-        }
-
-        {
-            const enabled = camera.isConnected() and !camera.isShooting();
-
-            try writer.print(
-                \\<button hx-post="/api/camera/take-picture"
-                \\ hx-target=".content" hx-swap="outerHTML" {s}>Take Picture</button>
-            , .{if (!enabled) "disabled" else ""});
-        }
-
-        try writer.print(
-            \\</div>
-        , .{});
-    }
-};
-
-const Content = struct {
-    pub fn format(self: *const Content, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = self;
-        _ = fmt;
-        _ = options;
-
-        const refresh = if (camera.isShooting())
-            \\hx-get="/api/camera/state" hx-swap="outerHTML" hx-trigger="every 2s"
-        else
-            "";
-
-        const cameraContent: CameraContent = .{};
-        const inputContent: InputsContent = .{};
-        const actionsContent: ActionsContent = .{};
-
-        try writer.print(
-            \\<div class="content" {0s}>{1}{2}{3}</div>
-        , .{ refresh, cameraContent, inputContent, actionsContent });
-    }
-};
-
-const IndexContent = struct {
-    pub fn format(self: *const IndexContent, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = self;
-        _ = fmt;
-        _ = options;
-
-        const content: Content = .{};
-
-        try writer.print(
-            \\<!doctype html>
-            \\<html lang="en">
-            \\<head>
-            \\  <meta meta="viewport" content="width=device-width, initial-scale=1.0" />
-            \\  <link rel="stylesheet" href="assets/index.css">
-            \\  <script src="assets/htmx.min.js"></script>
-            \\  <script src="assets/index.js"></script>
-            \\</head>
-            \\<body>
-            \\  {}
-            \\</body>
-            \\</html>
-        , .{content});
-    }
-};
-
 fn handle_get_index_html(response: *http.Server.Response) !void {
     var buf: [1024 * 8]u8 = undefined;
 
-    const content: IndexContent = .{};
+    const index: html.Index = .{};
 
-    const formatted = std.fmt.bufPrint(&buf, "{}", .{content}) catch |err| {
+    const formatted = std.fmt.bufPrint(&buf, "{}", .{index}) catch |err| {
         return try writeError(response, "Error formatting index.html", err);
     };
 
@@ -759,7 +446,9 @@ pub fn runHttpServer(allocator: std.mem.Allocator) !void {
     const address = std.net.Address.parseIp(server_addr, server_port) catch unreachable;
     try server.listen(address);
 
-    runServer(&server) catch {
+    runServer(&server) catch |err| {
+        log.err("Stoping http server {}", .{err});
         camera.stopCamera();
+        //return err;
     };
 }
