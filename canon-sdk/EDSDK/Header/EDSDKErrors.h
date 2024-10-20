@@ -8,7 +8,7 @@
 *******************************************************************************
 *                                                                             *
 *   Written and developed by Canon Inc.                                       *
-*   Copyright Canon Inc. 2006-2023 All Rights Reserved                        *
+*   Copyright Canon Inc. 2006-2024 All Rights Reserved                        *
 *                                                                             *
 ******************************************************************************/
 

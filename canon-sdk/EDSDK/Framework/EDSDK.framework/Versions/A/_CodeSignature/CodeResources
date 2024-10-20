@@ -10,7 +10,7 @@
 		</data>
 		<key>Resources/Info.plist</key>
 		<data>
-		KnWxl4991LsCiMOoJIutMp++AIg=
+		lnr3SD4Y5L/1GYbEqcaPrsI7RSw=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -28,7 +28,7 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			2R4lepBuGKI1srirSbFCoifsEF4=
+			3ihjV9Tu8ta/SreUZXMRFPM+gxw=
 			</data>
 			<key>requirement</key>
 			<string>identifier "com.canon.EdsImage" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = XE2XNRRXZ5</string>
@@ -48,11 +48,11 @@
 		<dict>
 			<key>hash</key>
 			<data>
-			KnWxl4991LsCiMOoJIutMp++AIg=
+			lnr3SD4Y5L/1GYbEqcaPrsI7RSw=
 			</data>
 			<key>hash2</key>
 			<data>
-			d7xK/ov5JKX9vtlfo4Y5GUK5LgkOwChAhgfvfvNKv38=
+			B31pAsJrSmuuunM0pzb+kzuN6slNuzTucLgw3j8wTHk=
 			</data>
 		</dict>
 	</dict>

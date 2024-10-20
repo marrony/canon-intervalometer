@@ -8,7 +8,7 @@
 *******************************************************************************
 *                                                                             *
 *   Written and developed by Canon Inc.										  *
-*   Copyright Canon Inc. 2006-2023 All Rights Reserved                        *
+*   Copyright Canon Inc. 2006-2024 All Rights Reserved                        *
 *                                                                             *
 ******************************************************************************/
 
@@ -675,6 +675,26 @@ EdsError EDSAPI EdsSetAttribute(
                             EdsDirectoryItemRef     inDirItemRef,
                             EdsFileAttributes       inFileAttribute );
 
+/*-----------------------------------------------------------------------------
+//
+//  Function:   EdsSetMetaImage
+//
+//  Description:
+//      Writes information to the metadata of an image (Jpeg only) in the camera.
+//
+//  Parameters:
+//       In:    inDirItemRef - The reference of the directory item. (Jpeg only)
+//              inMetaType - Designate the type of metadata to be set (ExifGPS or XMP)
+//              inMetaDataSize - Designate the size of the metadata in bytes.
+//              inMetaData - The buffer pointer to set metaData-value.
+//      Out:    None
+//
+//  Returns:    Any of the sdk errors.
+-----------------------------------------------------------------------------*/
+EdsError EDSAPI EdsSetMetaImage( EdsDirectoryItemRef inDirItemRef,
+                                EdsUInt32           inMetaType,
+                                EdsUInt32           inMetaDataSize,
+                                const EdsVoid*      inMetaData );
 
 /******************************************************************************
 *******************************************************************************

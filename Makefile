@@ -38,7 +38,7 @@ TARGET :=
 endif
 
 ifeq ($(OS),Darwin)
-LDFLAGS += -Fcanon-sdk/EDSDK/Framework -framework EDSDK
+LDFLAGS += -F canon-sdk/EDSDK/Framework -framework EDSDK
 LDFLAGS += -Wl,-rpath -Wl,@executable_path/Framework
 CFLAGS += -D__MACOS__ -D__APPLE__
 DEPS += bin/Framework/EDSDK.framework

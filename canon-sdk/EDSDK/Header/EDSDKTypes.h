@@ -1,4 +1,4 @@
-/******************************************************************************
+﻿/******************************************************************************
 *                                                                             *
 *   PROJECT : EOS Digital Software Development Kit EDSDK                      *
 *      NAME : EdsTypes.h                                                      *
@@ -8,7 +8,7 @@
 *******************************************************************************
 *                                                                             *
 *   Written and developed by Canon Inc.                                       *
-*   Copyright Canon Inc. 2006-2023 All Rights Reserved                        *
+*   Copyright Canon Inc. 2006-2024 All Rights Reserved                        *
 *                                                                             *
 ******************************************************************************/
 
@@ -83,6 +83,24 @@ typedef int                 EdsBool;
 typedef char                EdsChar;
 
 #ifdef __MACOS__
+ #ifndef SInt8
+
+typedef char                EdsInt8;
+typedef unsigned char       EdsUInt8;
+typedef short               EdsInt16;
+typedef unsigned short      EdsUInt16;
+typedef int                 EdsInt32;
+typedef unsigned int        EdsUInt32;
+  #if defined __LP64__
+typedef long                EdsInt64;
+typedef unsigned long       EdsUInt64;
+typedef unsigned long       size_t;
+  #else
+typedef long long           EdsInt64;
+typedef unsigned long long  EdsUInt64;
+  #endif
+
+ #else
 typedef SInt8      			EdsInt8;
 typedef UInt8       		EdsUInt8;
 typedef SInt16       		EdsInt16;
@@ -95,7 +113,9 @@ typedef unsigned long long  EdsUInt64;
 #else
 typedef SInt64        		EdsInt64;
 typedef UInt64        		EdsUInt64;
-#endif   
+#endif
+#endif
+
 #elif TARGET_OS_LINUX
 
 typedef char                EdsInt8;
@@ -335,6 +355,8 @@ Limited Properties
 #define kEdsPropID_MovieCurrentMedia       0x01000474
 #define kEdsPropID_FocusShiftSetting       0x01000457
 #define kEdsPropID_MovieHFRSetting         0x0100045d
+#define kEdsPropID_ContinuousAfMode        0x01000433
+#define kEdsPropID_AFTrackingObject        0x01000468
 
 
 
@@ -1294,6 +1316,26 @@ typedef struct tagEdsTime
     EdsUInt32   milliseconds;
 
 } EdsTime;
+
+
+/*-----------------------------------------------------------------------------
+GpsMetaData
+-----------------------------------------------------------------------------*/
+typedef struct tagEdsGpsMetaData
+{
+    EdsUInt8						latitudeRef;
+    EdsUInt8						longitudeRef;
+    EdsUInt8						altitudeRef;
+    EdsUInt8						status;
+    EdsRational                     latitude[3];
+    EdsRational                     longitude[3];
+    EdsRational                     altitude;
+    EdsRational                     timeStamp[3];
+    EdsUInt16                       dateStampYear;
+    EdsUInt8                        dateStampMonth;
+    EdsUInt8						dateStampDay;
+} EdsGpsMetaData;
+
 
 /*-----------------------------------------------------------------------------
  Device Info

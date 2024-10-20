@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>BuildMachineOSBuild</key>
-	<string>22G120</string>
+	<string>23D56</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleExecutable</key>
 	<string>EDSDK</string>
 	<key>CFBundleGetInfoString</key>
-	<string>EDSDK version 13.17.12.0, Copyright 2023 Canon Inc.</string>
+	<string>EDSDK version 13.18.0.0, Copyright 2024 Canon Inc.</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.canon.edsdk</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>FMWK</string>
 	<key>CFBundleShortVersionString</key>
-	<string>13.17.12.0</string>
+	<string>13.18.0.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleSupportedPlatforms</key>
@@ -27,7 +27,7 @@
 		<string>MacOSX</string>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>13.17.12.0</string>
+	<string>13.18.0.0</string>
 	<key>CSResourcesFileMapped</key>
 	<true/>
 	<key>DTCompiler</key>
@@ -37,15 +37,15 @@
 	<key>DTPlatformName</key>
 	<string>macosx</string>
 	<key>DTPlatformVersion</key>
-	<string>13.3</string>
+	<string>14.0</string>
 	<key>DTSDKBuild</key>
-	<string>22E245</string>
+	<string>23A334</string>
 	<key>DTSDKName</key>
-	<string>macosx13.3</string>
+	<string>macosx14.0</string>
 	<key>DTXcode</key>
-	<string>1431</string>
+	<string>1500</string>
 	<key>DTXcodeBuild</key>
-	<string>14E300c</string>
+	<string>15A240d</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>10.8</string>
 </dict>
