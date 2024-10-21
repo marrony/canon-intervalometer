@@ -70,7 +70,7 @@ static size_t render_camera_content(mg_pfn_t out, void *ptr, va_list *ap) {
 
 static void render_camera_response(struct mg_connection *c) {
   struct camera_state_t state;
-  get_copy_state(&state);
+  get_state_copy(&state);
 
   mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_camera_content, &state);
 }
@@ -277,7 +277,7 @@ static size_t render_content(mg_pfn_t out, void *ptr, va_list *ap) {
 static void render_index_html_response(struct mg_connection *c,
                                        struct mg_http_message *hm) {
   struct camera_state_t state;
-  get_copy_state(&state);
+  get_state_copy(&state);
 
   mg_http_reply(c, 200, CONTENT_TYPE_HTML,
                 "<!doctype html>"
@@ -296,7 +296,7 @@ static void render_index_html_response(struct mg_connection *c,
 
 static void render_state_response(struct mg_connection *c, bool no_content) {
   struct camera_state_t state;
-  get_copy_state(&state);
+  get_state_copy(&state);
 
   if (no_content && state.shooting) {
     mg_http_reply(c, 204, CONTENT_TYPE_HTML, "No Content");
@@ -327,7 +327,7 @@ static void handle_input_exposure(struct mg_connection *c,
   }
 
   struct camera_state_t state;
-  get_copy_state(&state);
+  get_state_copy(&state);
   mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_exposure, &state);
 }
 
@@ -339,7 +339,7 @@ static void handle_input_iso(struct mg_connection *c,
   }
 
   struct camera_state_t state;
-  get_copy_state(&state);
+  get_state_copy(&state);
   mg_http_reply(c, 200, CONTENT_TYPE_HTML, "%M", render_iso, &state);
 }
 
@@ -350,7 +350,7 @@ static void handle_input_delay(struct mg_connection *c,
     set_delay(buf);
 
   struct camera_state_t state;
-  get_copy_state(&state);
+  get_state_copy(&state);
   render_input_response(c, "delay", state.delay_us / SEC_TO_US,
                         inputs_enabled(&state));
 }
@@ -362,7 +362,7 @@ static void handle_input_interval(struct mg_connection *c,
     set_interval(buf);
 
   struct camera_state_t state;
-  get_copy_state(&state);
+  get_state_copy(&state);
   render_input_response(c, "interval", state.interval_us / SEC_TO_US,
                         inputs_enabled(&state));
 }
@@ -374,7 +374,7 @@ static void handle_input_frames(struct mg_connection *c,
     set_frames(buf);
 
   struct camera_state_t state;
-  get_copy_state(&state);
+  get_state_copy(&state);
   render_input_response(c, "frames", state.frames, inputs_enabled(&state));
 }
 

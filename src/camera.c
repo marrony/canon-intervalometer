@@ -186,7 +186,7 @@ static int g_exposures_size = 0;
 static struct iso_t g_isos[ALL_ISOS_SIZE] = {0};
 static int g_isos_size = 0;
 
-void get_copy_state(struct camera_state_t *state) {
+void get_state_copy(struct camera_state_t *state) {
   assert(pthread_mutex_lock(&g_state.mutex) == 0);
   memcpy(state, &g_state.state, sizeof(struct camera_state_t));
   assert(pthread_mutex_unlock(&g_state.mutex) == 0);
@@ -438,6 +438,7 @@ static void connect_command(void *data) {
   MG_DEBUG(("Connecting to %s", g_state.state.description));
 
   if (EdsOpenSession(g_state.camera) == EDS_ERR_OK) {
+    MG_DEBUG(("Session opened"));
     g_state.state.connected = true;
     fill_exposures();
     fill_iso_speeds();
@@ -524,6 +525,18 @@ static void take_picture_command(void *data) {
   }
 }
 
+static void take_single_picture_command(void *data) {
+  intptr_t frames = g_state.state.frames;
+  g_state.state.frames = 1;
+  async_queue_post(&g_main_queue, TAKE_PICTURE, NULL, /*async*/ true);
+  async_queue_post(&g_main_queue, SET_FRAMES, (void *)frames, /*async*/ true);
+}
+
+static void set_frames_command(void *data) {
+  int32_t frames = (intptr_t)data;
+  g_state.state.frames = frames;
+}
+
 static void start_shooting_command(void *data) {
   g_state.state.frames_taken = 0;
   g_state.state.shooting = true;
@@ -538,12 +551,17 @@ static void stop_shooting_command(void *data) {
   g_state.state.shooting = false;
 }
 
-static void terminate_command(void *data) { g_state.state.running = false; }
+static void terminate_command(void *data) {
+  MG_DEBUG(("Terminating"));
+  g_state.state.running = false;
+}
 
 static const char *command_names[] = {
-    "NO_OP",          "INITIALIZE",    "DEINITIALIZE",   "CONNECT",
-    "DISCONNECT",     "INITIAL_DELAY", "INTERVAL_DELAY", "TAKE_PICTURE",
-    "START_SHOOTING", "STOP_SHOOTING", "TERMINATE",
+    "NO_OP",          "INITIALIZE",     "DEINITIALIZE",
+    "CONNECT",        "DISCONNECT",     "INITIAL_DELAY",
+    "INTERVAL_DELAY", "TAKE_PICTURE",   "TAKE_SINGLE_PICTURE",
+    "SET_FRAMES",     "START_SHOOTING", "STOP_SHOOTING",
+    "TERMINATE",
 };
 
 typedef void (*command_handler_t)(void *);
@@ -557,6 +575,7 @@ static const command_handler_t command_table[] = {
     [INITIAL_DELAY] = initial_delay_command,
     [INTERVAL_DELAY] = interval_delay_command,
     [TAKE_PICTURE] = take_picture_command,
+    [TAKE_SINGLE_PICTURE] = take_single_picture_command,
     [START_SHOOTING] = start_shooting_command,
     [STOP_SHOOTING] = stop_shooting_command,
     [TERMINATE] = terminate_command,
@@ -567,6 +586,7 @@ static void sig_handler(int sig) {
   terminate_command(NULL);
   // async_queue_post(&g_main_queue, DISCONNECT, /*async*/ true);
   // async_queue_post(&g_main_queue, TERMINATE, /*async*/ true);
+  exit(0);
 }
 
 void command_processor(void) {

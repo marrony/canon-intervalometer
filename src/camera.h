@@ -22,6 +22,8 @@ enum command_type {
   INITIAL_DELAY,
   INTERVAL_DELAY,
   TAKE_PICTURE,
+  TAKE_SINGLE_PICTURE,
+  SET_FRAMES,
   START_SHOOTING,
   STOP_SHOOTING,
   TERMINATE,
@@ -46,7 +48,7 @@ extern struct sync_queue_t g_main_queue;
 
 void command_processor(void);
 
-void get_copy_state(struct camera_state_t *state);
+void get_state_copy(struct camera_state_t *state);
 bool is_running(void);
 
 void set_iso_index(const char *index_str);
