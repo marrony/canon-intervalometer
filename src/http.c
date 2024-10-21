@@ -487,15 +487,12 @@ static struct http_handler_t http_handlers[] = {
 static int32_t http_handlers_len =
     sizeof(http_handlers) / sizeof(struct http_handler_t);
 
-static void evt_handler(struct mg_connection *c, int ev, void *ev_data,
-                        void *fn_data) {
-  (void)fn_data;
-
+static void evt_handler(struct mg_connection *c, int ev, void *ev_data) {
   if (ev == MG_EV_HTTP_MSG) {
     struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
     struct mg_str method_uri =
-        mg_str_n(hm->method.ptr, hm->method.len + hm->uri.len + 1);
+        mg_str_n(hm->method.buf, hm->method.len + hm->uri.len + 1);
 
     for (int32_t i = 0; i < http_handlers_len; i++) {
       if (mg_match(method_uri, mg_str(http_handlers[i].endpoint), NULL)) {
